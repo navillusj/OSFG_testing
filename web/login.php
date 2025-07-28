@@ -11,14 +11,21 @@ if (isset($_SESSION['logged_in']) && $_SESSION['logged_in'] === true) {
 function loadUsers() {
     $users_file = '/var/www/html/users.json';
     if (!file_exists($users_file)) {
+        // Log error and create an empty users.json if it's missing.
+        error_log("Error: users.json not found at $users_file. Creating empty file.");
+        file_put_contents($users_file, '{"users": []}');
         return ['users' => []];
     }
     $json_content = file_get_contents($users_file);
     if ($json_content === false) {
+        error_log("Error: Failed to read users.json at $users_file. Check permissions.");
         return ['users' => []];
     }
     $data = json_decode($json_content, true);
     if (json_last_error() !== JSON_ERROR_NONE) {
+        error_log("Error: Invalid JSON format in users.json: " . json_last_error_msg());
+        // Attempt to fix by writing empty array if JSON is bad.
+        file_put_contents($users_file, '{"users": []}');
         return ['users' => []];
     }
     return $data;
@@ -33,11 +40,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $submitted_password_hash = hash('sha256', $_POST['password']);
         
         $authenticated = false;
-        foreach ($users_data['users'] as $user) {
-            if ($user['username'] === $submitted_username && $user['password_hash'] === $submitted_password_hash) {
-                $authenticated = true;
-                $_SESSION['username'] = $submitted_username;
-                break;
+        if (isset($users_data['users']) && is_array($users_data['users'])) {
+            foreach ($users_data['users'] as $user) {
+                if (isset($user['username']) && isset($user['password_hash'])) {
+                    if ($user['username'] === $submitted_username && $user['password_hash'] === $submitted_password_hash) {
+                        $authenticated = true;
+                        $_SESSION['username'] = $submitted_username; // Store username in session
+                        break;
+                    }
+                }
             }
         }
 
