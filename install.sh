@@ -81,9 +81,8 @@ detect_interfaces() {
     done
 
     WAN_IFACE_CHOICE=
-    while ! get_choice "Select your WAN (Internet-facing) interface number" "1" "${#interfaces_array[@]}" "WAN_IFACE_CHOICE"; do
-        :
-    done
+    read -p "Select your WAN (Internet-facing) interface number (Default: 1): " WAN_IFACE_CHOICE
+    WAN_IFACE_CHOICE=${WAN_IFACE_CHOICE:-1}
     WAN_IFACE=${interfaces_array[$((WAN_IFACE_CHOICE-1))]}
     echo "Selected WAN Interface: $WAN_IFACE"
     
@@ -104,9 +103,15 @@ detect_interfaces() {
     LAN_IFACE_NUMBERS=()
     default_lan_choices_str=$(IFS=' '; echo "${LAN_CHOICE_MAP[*]}")
     
-    while ! get_list_of_choices "Select the numbers of your LAN interfaces to bridge (space-separated)" "$default_lan_choices_str" "${#interfaces_array[@]}" "LAN_IFACE_NUMBERS"; do
-        :
-    done
+    read -p "Select the numbers of your LAN interfaces to bridge (space-separated, Default: all non-WAN interfaces): " user_lan_input
+    if [[ -z "$user_lan_input" ]]; then
+        LAN_IFACE_NUMBERS=(${default_lan_choices_str[@]})
+    else
+        if ! get_list_of_choices "" "$user_lan_input" "${#interfaces_array[@]}" "LAN_IFACE_NUMBERS"; then
+            echo "Invalid LAN interface selection. Exiting."
+            exit 1
+        fi
+    fi
     
     LAN_IFACES=""
     for num in "${LAN_IFACE_NUMBERS[@]}"; do
@@ -133,7 +138,7 @@ detect_interfaces() {
         done
 
         if [[ "$wifi_interfaces_available" -eq 0 ]]; then
-            echo "No wireless interface was selected as part of the LAN interfaces. Skipping Wi-Fi setup."
+            echo "No wireless interface was detected as part of the LAN interfaces. Skipping Wi-Fi setup."
             setup_wifi="n"
         else
             read -p "Enter your Wi-Fi SSID (e.g., TheRouter): " WIFI_SSID
@@ -161,7 +166,7 @@ detect_interfaces() {
     LOCAL_DOMAIN=${LOCAL_DOMAIN:-"home.lan"}
 }
 
-# --- NEW: Function to set up login credentials in users.json ---
+# Function to set up login credentials in users.json
 setup_login_credentials() {
     echo "--- Setting up initial user credentials ---"
     read -p "Enter a username for the web dashboard: " WEB_USERNAME
@@ -195,9 +200,9 @@ install_dependencies() {
     echo "--- Installing required packages ---"
     sudo apt update
     if [[ "$setup_wifi" == "y" ]]; then
-        sudo apt install -y net-tools dnsmasq hostapd wireless-tools iw ipset iptables-persistent apache2 php libapache2-mod-php jq dnsutils ipcalc dos2unix openssl
+        sudo apt install -y net-tools dnsmasq hostapd wireless-tools iw ipset iptables-persistent apache2 php libapache2-mod-php jq dnsutils ipcalc dos2unix openssl bridge-utils
     else
-        sudo apt install -y net-tools dnsmasq ipset iptables-persistent apache2 php libapache2-mod-php jq dnsutils ipcalc dos2unix openssl
+        sudo apt install -y net-tools dnsmasq ipset iptables-persistent apache2 php libapache2-mod-php jq dnsutils ipcalc dos2unix openssl bridge-utils
     fi
 }
 
@@ -293,6 +298,7 @@ generate_configs() {
         addresses: [$LAN_IP, 8.8.8.8, 8.8.4.4]
 "
     echo "$NETPLAN_CONFIG" | sudo tee /etc/netplan/01-network-config.yaml > /dev/null
+    sudo chmod 600 /etc/netplan/01-network-config.yaml
     sudo netplan apply
     
     sudo mv /etc/dnsmasq.conf /etc/dnsmasq.conf.bak 2>/dev/null
@@ -337,7 +343,7 @@ EOF
     fi
 
     echo "--- Creating update_hostapd.sh script ---"
-    cat <<'EOF' | sudo tee /usr/local/bin/update_hostapd.sh > /dev/null
+    cat <<'EOF' | sudo tee ./scripts/update_hostapd.sh > /dev/null # This now creates it in scripts/
 #!/bin/bash
 NEW_SSID="$1"
 NEW_PASS="$2"
@@ -376,17 +382,20 @@ else
     exit 1
 fi
 EOF
-    sudo chmod +x /usr/local/bin/update_hostapd.sh
+    sudo chmod +x ./scripts/update_hostapd.sh # Make it executable in scripts/
 
     echo "--- Correcting script line endings ---"
     dos2unix ./scripts/update_blocked_ips.sh
     dos2unix ./scripts/update_net_stats.sh
+    dos2unix ./scripts/update_hostapd.sh # FIX: Add dos2unix for this script too
     
     sudo cp ./scripts/update_blocked_ips.sh /usr/local/bin/
     sudo cp ./scripts/update_net_stats.sh /usr/local/bin/
+    sudo cp ./scripts/update_hostapd.sh /usr/local/bin/ # FIX: Copy to /usr/local/bin/
 
     sudo chmod +x /usr/local/bin/update_blocked_ips.sh
     sudo chmod +x /usr/local/bin/update_net_stats.sh
+    sudo chmod +x /usr/local/bin/update_hostapd.sh # Ensure it's executable in /usr/local/bin/
 
     echo "--- Creating PHP config file ---"
     cat <<EOF | sudo tee /var/www/html/config.php > /dev/null
@@ -403,22 +412,10 @@ setup_web_interface() {
     
     sudo rm -f /var/www/html/index.html
     
-    sudo cp ./web/login.php /var/www/html/
-    sudo cp ./web/index.php /var/www/html/
-    sudo cp ./web/manage_blocked_sites.php /var/www/html/
-    sudo cp ./web/view_network_stats.php /var/www/html/
-    sudo cp ./web/iprules.php /var/www/html/
-    sudo cp ./web/access_control.php /var/www/html/
-    sudo cp ./web/toggle_access.php /var/www/html/
-    sudo cp ./web/flush_blocked.php /var/www/html/
-    sudo cp ./web/logout.php /var/www/html/
-    sudo cp ./web/style.css /var/www/html/
-    sudo cp ./web/background.jpg /var/www/html/
-    sudo cp ./web/logo.png /var/www/html/
-    sudo cp ./web/settings.php /var/www/html/
-    sudo cp ./web/manage_users.php /var/www/html/
+    # Copy all web files from ./web/ to /var/www/html/
+    sudo cp -r ./web/* /var/www/html/
     
-    # --- NEW: Ensure users.json exists with correct permissions before the login credentials are written.
+    # Ensure users.json exists with correct permissions
     sudo touch /var/www/html/users.json
     sudo chown www-data:www-data /var/www/html/users.json
     sudo chmod 660 /var/www/html/users.json
@@ -426,11 +423,13 @@ setup_web_interface() {
     # The old credentials.php file is no longer used, so we can remove it.
     sudo rm -f /var/www/html/credentials.php
     
-    sudo touch /var/www/html/blocked_domains.txt
+    sudo touch /var/www/html/blocked_domains.txt # Ensure this file exists
     
+    # Set ownership and permissions for the entire web root
     sudo chown -R www-data:www-data /var/www/html
-    sudo chmod 644 /var/www/html/*
-    
+    sudo chmod -R 644 /var/www/html/
+    sudo find /var/www/html -type d -exec chmod 755 {} + # Directories should be executable
+
     echo "Adding sudo rule for www-data to run scripts..."
     echo "www-data ALL=(root) NOPASSWD: /usr/local/bin/update_blocked_ips.sh, /usr/sbin/ipset add no_internet_access *, /usr/sbin/ipset del no_internet_access *, /usr/sbin/ipset flush no_internet_access, /usr/local/bin/update_hostapd.sh, /usr/bin/systemctl restart hostapd" | sudo tee /etc/sudoers.d/www-data_firewall > /dev/null
     sudo chmod 0440 /etc/sudoers.d/www-data_firewall
@@ -453,7 +452,8 @@ configure_services() {
     sudo systemctl restart dnsmasq
     sudo systemctl enable dnsmasq
     sudo systemctl restart apache2
-    sudo apt install php-sessions
+    # Ensure php-sessions is installed
+    sudo apt install php-sessions -y
     sudo chmod 644 /var/lib/misc/dnsmasq.leases
     sudo usermod -aG dnsmasq www-data
     sudo chmod g+r /var/lib/misc/dnsmasq.leases
@@ -463,7 +463,7 @@ configure_services() {
 # --- 6. FIRST-RUN SCRIPT EXECUTION ---
 run_first_time_scripts() {
     echo "--- Running custom scripts for the first time to ensure they work ---"
-    
+
     echo "Executing update_blocked_ips.sh..."
     sudo /usr/local/bin/update_blocked_ips.sh
     if [ $? -ne 0 ]; then
