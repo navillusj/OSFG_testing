@@ -80,4 +80,3 @@ echo "Processed $NUM_DOMAINS_PROCESSED domains from '$DOMAIN_FILE'."
 echo "Added $NUM_ADDED_IPS unique IPv4 addresses to '$IPSET_NAME'."
 echo "Current IPs in $IPSET_NAME:"
 sudo ipset list "$IPSET_NAME"
-
