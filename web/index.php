@@ -1,5 +1,4 @@
 <?php
-// Start the session and check for authentication at the very beginning
 session_start();
 if (!isset($_SESSION['logged_in']) || $_SESSION['logged_in'] !== true) {
     header('Location: login.php');
@@ -30,8 +29,7 @@ if (!isset($wan_interface)) {
         <a href="manage_blocked_sites.php" class="button"><i class="fas fa-filter"></i> View/Edit Blocked Sites</a>
         <a href="view_network_stats.php" class="button"><i class="fas fa-chart-line"></i> View Network Stats</a>
         <a href="access_control.php" class="button"><i class="fas fa-user-shield"></i> Access Control</a>
-        <a href="settings.php" class="button"><i class="fas fa-user-shield"></i> Settings</a>
-        <a href="manage_users.php" class="button"><i class="fas fa-user-shield"></i> Manage Users</a>
+        <a href="settings.php" class="button"><i class="fas fa-cog"></i> Settings</a>
         <a href="logout.php" class="button" style="background-color: #d9363e;"><i class="fas fa-sign-out-alt"></i> Logout</a>
 
         <div class="note">
@@ -93,7 +91,7 @@ if (!isset($wan_interface)) {
             ];
             
             // This is a more robust way to get all active interfaces
-            $all_interfaces_output = secure_shell_exec("ip -o link | awk -F': ' '{print \$2}' | grep -v 'lo'", 'all_interfaces');
+            $all_interfaces_output = secure_shell_exec("ip -o link show | awk -F': ' '{print \$2}' | grep -v 'lo'", 'all_interfaces');
             $all_interfaces_array = explode(' ', $all_interfaces_output);
             
             foreach ($all_interfaces_array as $iface) {
