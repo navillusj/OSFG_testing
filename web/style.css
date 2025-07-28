@@ -1,0 +1,374 @@
+body {
+    font-family: 'Inter', 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    margin: 0;
+    padding: 20px;
+    background-color: #121212;
+    color: #e0e0e0;
+    line-height: 1.6;
+}
+
+body.login-page {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 100vh;
+    padding: 0;
+    background-image: url('background.jpg');
+    background-size: cover;
+    background-position: center;
+}
+
+.login-container {
+    max-width: 400px;
+    width: 100%;
+    padding: 40px;
+    background-color: rgba(30, 30, 30, 0.85); /* Semi-transparent background */
+    border-radius: 12px;
+    border: 1px solid #333;
+    box-shadow: 0 8px 25px rgba(0, 0, 0, 0.5);
+    text-align: center;
+}
+
+.login-logo {
+    width: 350px;
+    height: auto;
+    margin-bottom: 20px;
+}
+
+.login-form .input-group {
+    position: relative;
+    margin-bottom: 20px;
+}
+
+.login-form .input-group i {
+    position: absolute;
+    left: 15px;
+    top: 50%;
+    transform: translateY(-50%);
+    color: #888;
+}
+
+.login-form input[type="text"],
+.login-form input[type="password"] {
+    width: 100%;
+    padding: 12px 12px 12px 45px;
+    background-color: #2a2a2a;
+    border: 1px solid #444;
+    border-radius: 6px;
+    color: #e0e0e0;
+    box-sizing: border-box;
+}
+
+.system-info {
+    font-size: 0.9em;
+    color: #aaa;
+    margin-bottom: 25px;
+    border-top: 1px solid #333;
+    border-bottom: 1px solid #333;
+    padding: 10px 0;
+}
+
+/* Existing styles below */
+.container {
+    max-width: 1200px;
+    margin: 20px auto;
+    padding: 30px;
+    background-color: #1e1e1e;
+    border-radius: 12px;
+    border: 1px solid #333;
+    box-shadow: 0 8px 25px rgba(0, 0, 0, 0.3);
+}
+
+h1, h2, h3, h4 {
+    color: #ffffff;
+    font-weight: 600;
+    margin-top: 30px;
+    margin-bottom: 15px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid #333;
+}
+
+h1 {
+    font-size: 2.4em;
+    text-align: center;
+    border-bottom: none;
+    color: #4a90e2;
+    margin-bottom: 25px;
+}
+
+h2 {
+    font-size: 1.7em;
+    border-bottom-color: #4a90e2;
+}
+
+h3 {
+    font-size: 1.3em;
+    border-bottom: none;
+    color: #e0e0e0;
+}
+
+h4 {
+    margin-top: 0;
+    margin-bottom: 8px;
+    font-size: 1.1em;
+    color: #50c878;
+    border-bottom: none;
+}
+
+.note, .message, .error, .warning, .hint {
+    padding: 15px 20px;
+    margin-bottom: 20px;
+    border-radius: 8px;
+    border: 1px solid;
+    display: flex;
+    align-items: flex-start;
+}
+
+.note {
+    background-color: rgba(74, 144, 226, 0.1);
+    border-color: #4a90e2;
+    color: #a4c8f0;
+}
+
+.message {
+    background-color: rgba(80, 200, 120, 0.1);
+    border-color: #50c878;
+    color: #a8e5ba;
+}
+
+.error {
+    background-color: rgba(217, 54, 62, 0.1);
+    border-color: #d9363e;
+    color: #f0a0a4;
+}
+
+.warning {
+    background-color: rgba(245, 166, 35, 0.1);
+    border-color: #f5a623;
+    color: #f9d59b;
+}
+
+.hint {
+    background-color: #2a2a2a;
+    border-color: #444;
+    color: #aaa;
+    margin-top: 25px;
+}
+
+pre {
+    background-color: #2a2a2a;
+    padding: 15px;
+    border: 1px solid #333;
+    border-radius: 6px;
+    white-space: pre-wrap;
+    word-break: break-all;
+    font-family: 'JetBrains Mono', 'Fira Code', monospace;
+    font-size: 0.9em;
+    color: #d0d0d0;
+    max-height: 300px;
+    overflow-y: auto;
+}
+
+code {
+    background-color: #333;
+    color: #4a90e2;
+    padding: 2px 5px;
+    border-radius: 4px;
+    font-family: 'JetBrains Mono', monospace;
+}
+
+.button {
+    display: inline-flex;
+    align-items: center;
+    background-color: #4a90e2;
+    color: white;
+    padding: 12px 25px;
+    border: none;
+    border-radius: 6px;
+    text-decoration: none;
+    font-size: 1em;
+    font-weight: 500;
+    transition: background-color 0.3s ease, transform 0.2s ease;
+    cursor: pointer;
+    margin-bottom: 20px;
+}
+
+.button:hover {
+    background-color: #357abd;
+    transform: translateY(-2px);
+}
+
+.button.sync-button {
+    background-color: #50c878;
+}
+
+.button.sync-button:hover {
+    background-color: #40a060;
+}
+
+.grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    gap: 25px;
+    margin-top: 25px;
+}
+
+.card {
+    background-color: #2a2a2a;
+    border: 1px solid #333;
+    padding: 20px;
+    border-radius: 10px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+    transition: transform 0.2s ease, box-shadow 0.2s ease;
+    border-left: 5px solid #4a90e2;
+}
+
+.card:hover {
+    transform: translateY(-5px);
+    box-shadow: 0 10px 25px rgba(0, 0, 0, 0.2);
+}
+
+.card h3 {
+    margin-top: 0;
+    display: flex;
+    align-items: center;
+}
+
+.card h3 .fas {
+    margin-right: 10px;
+    color: #4a90e2;
+}
+
+.card p {
+    margin: 6px 0;
+    color: #ccc;
+}
+
+.card strong {
+    color: #e0e0e0;
+    font-weight: 600;
+}
+
+.status-up {
+    color: #50c878;
+    font-weight: bold;
+}
+
+.status-down {
+    color: #d9363e;
+    font-weight: bold;
+}
+
+.dhcp-card {
+    border-left-color: #50c878;
+}
+
+.dhcp-card h3 .fas {
+    color: #50c878;
+}
+
+.stat-card {
+    background-color: #2a2a2a;
+    padding: 20px;
+    border-radius: 8px;
+    text-align: center;
+    border: 1px solid #333;
+}
+
+.stat-card p {
+    font-size: 2em;
+    font-weight: bold;
+    color: #4a90e2;
+    margin: 10px 0;
+}
+
+textarea {
+    width: 100%;
+    height: 300px;
+    background-color: #2a2a2a;
+    border: 1px solid #444;
+    color: #e0e0e0;
+    padding: 10px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 14px;
+    border-radius: 6px;
+    box-sizing: border-box;
+}
+
+form {
+    display: flex;
+    flex-direction: column;
+}
+
+.form-actions {
+    margin-top: 15px;
+    display: flex;
+    gap: 15px;
+}
+
+footer {
+    text-align: center;
+    margin-top: 40px;
+    padding: 20px;
+    border-top: 1px solid #333;
+    color: #888;
+    font-size: 0.9em;
+}
+
+@media (max-width: 768px) {
+    body {
+        padding: 10px;
+    }
+    .container {
+        padding: 20px;
+    }
+    .grid {
+        grid-template-columns: 1fr;
+    }
+    h1 {
+        font-size: 2em;
+    }
+}
+
+/* ------------------------------------------------ */
+/* CSS for the toggle switch                        */
+/* ------------------------------------------------ */
+.switch {
+    position: relative;
+    display: inline-block;
+    width: 60px;
+    height: 34px;
+}
+.switch input {
+    opacity: 0;
+    width: 0;
+    height: 0;
+}
+.slider {
+    position: absolute;
+    cursor: pointer;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background-color: #d9363e; /* Red for blocked */
+    transition: .4s;
+    border-radius: 34px;
+}
+.slider:before {
+    position: absolute;
+    content: "";
+    height: 26px;
+    width: 26px;
+    left: 4px;
+    bottom: 4px;
+    background-color: white;
+    transition: .4s;
+    border-radius: 50%;
+}
+input:checked + .slider {
+    background-color: #50c878; /* Green for allowed */
+}
+input:checked + .slider:before {
+    transform: translateX(26px);
+}
