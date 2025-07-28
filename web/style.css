@@ -22,7 +22,7 @@ body.login-page {
     max-width: 400px;
     width: 100%;
     padding: 40px;
-    background-color: rgba(30, 30, 30, 0.85); /* Semi-transparent background */
+    background-color: rgba(30, 30, 30, 0.85);
     border-radius: 12px;
     border: 1px solid #333;
     box-shadow: 0 8px 25px rgba(0, 0, 0, 0.5);
@@ -68,7 +68,6 @@ body.login-page {
     padding: 10px 0;
 }
 
-/* Existing styles below */
 .container {
     max-width: 1200px;
     margin: 20px auto;
@@ -206,6 +205,24 @@ code {
     background-color: #40a060;
 }
 
+/* NEW: Styles for the add and remove buttons */
+.button-add {
+    background-color: #50c878;
+}
+
+.button-add:hover {
+    background-color: #40a060;
+}
+
+.button-remove {
+    background-color: #d9363e;
+}
+
+.button-remove:hover {
+    background-color: #b32a32;
+}
+
+/* Existing styles below */
 .grid {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
@@ -371,4 +388,34 @@ input:checked + .slider {
 }
 input:checked + .slider:before {
     transform: translateX(26px);
+}
+
+.interfaces-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 20px;
+    background-color: #2a2a2a;
+    border-radius: 8px;
+    overflow: hidden;
+}
+
+.interfaces-table th, .interfaces-table td {
+    padding: 15px;
+    text-align: left;
+    border-bottom: 1px solid #333;
+}
+
+.interfaces-table th {
+    background-color: #1e1e1e;
+    font-weight: 600;
+    color: #4a90e2;
+    text-transform: uppercase;
+}
+
+.interfaces-table tbody tr:last-child td {
+    border-bottom: none;
+}
+
+.interfaces-table tbody tr:hover {
+    background-color: #333;
 }
