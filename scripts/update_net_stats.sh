@@ -1,8 +1,7 @@
 #!/bin/bash
 # set -x # <-- IMPORTANT: Uncomment this line (remove the '#') if you need verbose debugging output.
-         #    It will show every command executed by the script, which is invaluable for troubleshooting.
-         #    Remember to comment it out after successful debugging to reduce log verbosity.
-
+#    It will show every command executed by the script, which is invaluable for troubleshooting.
+#    Remember to comment it out after successful debugging to reduce log verbosity.
 # --- Configuration ---
 # File to store the network statistics in JSON format for the PHP webpage to read.
 # Ensure this directory exists and is writable by the user running this script (root via sudo/cron),
@@ -11,7 +10,6 @@
 #   sudo mkdir -p /var/log/
 #   sudo touch /var/log/network_stats.json
 STATS_FILE="/var/log/network_stats.json" # <--- IMPORTANT: Verify/Change this path if needed!
-
 # File to store previous statistics (cumulative bytes and timestamp) for delta calculation.
 # This is a temporary file used internally by the script to calculate upload/download amounts
 # between each script run.
@@ -21,7 +19,6 @@ PREV_STATS_FILE="/tmp/network_stats_prev.json"
 # Run `ip a` on your server to confirm the exact name of your primary internet-facing interface.
 # Based on your previous output, 'br0' is the correct interface name for your setup.
 INTERFACE="br0" # <--- IMPORTANT: Verify this is your actual network interface!
-
 # --- Function to check if 'jq' is installed ---
 # 'jq' is a command-line JSON processor and is essential for creating and parsing the JSON data.
 check_jq() {
@@ -74,10 +71,10 @@ get_interface_stats() {
 
 # --- Main Script Logic ---
 check_jq # Ensure 'jq' is installed and available before proceeding.
-
 echo "$(date): Starting network statistics collection for $INTERFACE..."
 
-# Get current bytes. If 'get_interface_stats' fails (returns non-zero exit code), exit the script.
+# Get current bytes.
+# If 'get_interface_stats' fails (returns non-zero exit code), exit the script.
 READ_STATS_OUTPUT=$(get_interface_stats)
 if [ $? -ne 0 ]; then
     echo "$(date): Script failed to get interface statistics. Exiting." >&2
@@ -88,7 +85,6 @@ fi
 CURRENT_RX_BYTES=$(echo "$READ_STATS_OUTPUT" | awk '{print $1}')
 CURRENT_TX_BYTES=$(echo "$READ_STATS_OUTPUT" | awk '{print $2}')
 CURRENT_TIMESTAMP=$(date +%s) # Get current Unix timestamp (seconds since epoch).
-
 # Read previous stats from PREV_STATS_FILE for delta calculation.
 if [ -f "$PREV_STATS_FILE" ]; then
     PREV_STATS_JSON=$(cat "$PREV_STATS_FILE")
@@ -102,7 +98,7 @@ else
     PREV_RX_BYTES=0
     PREV_TX_BYTES=0
     PREV_TIMESTAMP=$CURRENT_TIMESTAMP # Set to current timestamp to prevent huge initial delta.
-    echo "$(date): Previous stats file '$PREV_STATS_FILE' not found or empty. Initializing with zero deltas."
+    echo "$(date): Previous stats file '$PREV_STATS_FILE' not found or empty. Initializing with zero deltas." >&2
 fi
 
 # Calculate deltas (amount of bytes transferred since the last script run).
@@ -113,11 +109,11 @@ DELTA_TX_BYTES=$((CURRENT_TX_BYTES - PREV_TX_BYTES))
 # it means the counter has reset (e.g., after a reboot). In this case, use the
 # current cumulative bytes as the delta for this interval.
 if (( DELTA_RX_BYTES < 0 )); then
-    echo "$(date): Detected RX counter reset. Delta set to current RX: $CURRENT_RX_BYTES."
+    echo "$(date): Detected RX counter reset. Delta set to current RX: $CURRENT_RX_BYTES." >&2
     DELTA_RX_BYTES=$CURRENT_RX_BYTES
 fi
 if (( DELTA_TX_BYTES < 0 )); then
-    echo "$(date): Detected TX counter reset. Delta set to current TX: $CURRENT_TX_BYTES."
+    echo "$(date): Detected TX counter reset. Delta set to current TX: $CURRENT_TX_BYTES." >&2
     DELTA_TX_BYTES=$CURRENT_TX_BYTES
 fi
 
