@@ -1,7 +1,12 @@
 <?php
+session_start();
+if (!isset($_SESSION['logged_in']) || $_SESSION['logged_in'] !== true) {
+    header('Location: login.php');
+    exit();
+}
+
 $domain_file_path = '/var/www/html/blocked_domains.txt';
 $ipset_name = 'blocked_sites';
-// The script is now located in a more standard system directory
 $update_script_path = '/usr/local/bin/update_blocked_ips.sh';
 
 $message = '';
@@ -85,10 +90,9 @@ if (file_exists($domain_file_path) && is_readable($domain_file_path)) {
 
         <div class="hint">
             <h3>Recommended Sync Method: Cron Job</h3>
-            <p>For security and stability, it is strongly recommended to set up a `cron` job to run the update script periodically.
-                <br>
-            The script is located at: <code><?php echo htmlspecialchars($update_script_path); ?></code>
-            Example `cron` entry (run <code>sudo crontab -e</code>):
+            <p>For security and stability, it is strongly recommended to set up a `cron` job to run the update script periodically.</p>
+            <p>The script is located at: <code><?php echo htmlspecialchars($update_script_path); ?></code></p>
+            <p>Example `cron` entry (run <code>sudo crontab -e</code>):</p>
             <pre>*/5 * * * * <?php echo htmlspecialchars($update_script_path); ?> &gt;/dev/null 2&gt;&amp;1</pre>
            </p>
         </div>
