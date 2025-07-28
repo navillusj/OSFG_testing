@@ -1,4 +1,10 @@
 <?php
+session_start();
+if (!isset($_SESSION['logged_in']) || $_SESSION['logged_in'] !== true) {
+    header('Location: login.php');
+    exit();
+}
+
 // Set headers to prevent caching
 header("Cache-Control: no-store, no-cache, must-revalidate, max-age=0");
 header("Pragma: no-cache");
@@ -46,6 +52,7 @@ $connectedDevices = getConnectedDevices();
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Internet Access Control</title>
     <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css">
 </head>
 <body>
 
@@ -67,18 +74,19 @@ $connectedDevices = getConnectedDevices();
         <?php else: ?>
             <?php foreach ($connectedDevices as $device): ?>
             <div class="card">
-                <h3><?php echo htmlspecialchars($device['hostname']); ?></h3>
-                <div class="device-info">
-                    <p><strong>IP:</strong> <?php echo htmlspecialchars($device['ip']); ?></p>
-                    <p><strong>MAC:</strong> <?php echo htmlspecialchars($device['mac']); ?></p>
+                <h3><i class="fas fa-network-wired"></i> <?php echo htmlspecialchars($device['hostname']); ?></h4>
+                <p><strong>IP Address:</strong> <?php echo htmlspecialchars($device['ip']); ?></p>
+                <p><strong>MAC Address:</strong> <?php echo htmlspecialchars(strtoupper($device['mac'])); ?></p>
+                <div class="toggle-container">
+                    <span>Internet Access:</span>
+                    <form action="toggle_access.php" method="get" style="display:inline-block; margin-left: 10px;">
+                        <input type="hidden" name="ip" value="<?php echo htmlspecialchars($device['ip']); ?>">
+                        <label class="switch">
+                            <input type="checkbox" name="action" value="add" onchange="this.form.submit()" <?php echo isIpBlocked($device['ip']) ? '' : 'checked'; ?>>
+                            <span class="slider round"></span>
+                        </label>
+                    </form>
                 </div>
-                <form action="toggle_access.php" method="get">
-                    <input type="hidden" name="ip" value="<?php echo htmlspecialchars($device['ip']); ?>">
-                    <label class="switch">
-                        <input type="checkbox" name="action" value="<?php echo isIpBlocked($device['ip']) ? 'del' : 'add'; ?>" onchange="this.form.submit()" <?php echo isIpBlocked($device['ip']) ? '' : 'checked'; ?>>
-                        <span class="slider"></span>
-                    </label>
-                </form>
             </div>
             <?php endforeach; ?>
         <?php endif; ?>
