@@ -5,11 +5,24 @@ if (!isset($_SESSION['logged_in']) || $_SESSION['logged_in'] !== true) {
     exit();
 }
 
+// Function to safely execute shell commands
+function secure_shell_exec($command, $log_context = 'general') {
+    error_log(sprintf("[%s] Executing command for %s: %s", date('Y-m-d H:i:s'), $log_context, $command));
+    $output = shell_exec($command . ' 2>&1');
+    if ($output === null) {
+        error_log(sprintf("[%s] ERROR: Command failed for %s. Command: '%s'", date('Y-m-d H:i:s'), $log_context, $command));
+        return "Error: Command failed or not found.";
+    }
+    return trim($output);
+}
+
+// Global variables
 $message = '';
 $error = '';
 $hostapd_conf_path = '/etc/hostapd/hostapd.conf';
 
-if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+// --- Handle Wi-Fi settings form submission ---
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_wifi'])) {
     if (isset($_POST['ssid']) && isset($_POST['password'])) {
         $ssid = trim($_POST['ssid']);
         $password = trim($_POST['password']);
@@ -17,7 +30,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if (empty($ssid) || empty($password)) {
             $error = "SSID and Password cannot be empty.";
         } else {
-            // Use a secure shell script to update the configuration
             $command = "sudo /usr/local/bin/update_hostapd.sh " . escapeshellarg($ssid) . " " . escapeshellarg($password) . " 2>&1";
             $output = shell_exec($command);
             
@@ -30,7 +42,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 }
 
-// Read current settings to pre-populate the form
+// Read current Wi-Fi settings to pre-populate the form
 $current_ssid = 'N/A';
 $current_pass = 'N/A';
 if (file_exists($hostapd_conf_path)) {
@@ -44,6 +56,7 @@ if (file_exists($hostapd_conf_path)) {
         }
     }
 }
+
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -72,6 +85,7 @@ if (file_exists($hostapd_conf_path)) {
             <p>Current SSID: <strong><?php echo htmlspecialchars($current_ssid); ?></strong></p>
             <p>Current Password: <strong><?php echo htmlspecialchars($current_pass); ?></strong></p>
             <form action="settings.php" method="post" style="margin-top: 20px;">
+                <input type="hidden" name="update_wifi" value="1">
                 <label for="ssid">New SSID:</label>
                 <input type="text" id="ssid" name="ssid" value="<?php echo htmlspecialchars($current_ssid); ?>" required>
                 <label for="password">New Password:</label>
@@ -81,6 +95,11 @@ if (file_exists($hostapd_conf_path)) {
                 </div>
             </form>
         </div>
+        
+        <div class="note">
+            <p>Network Interface Management has been temporarily removed due to issues. It will be re-introduced in a future update.</p>
+        </div>
+
     </div>
 </body>
 </html>
