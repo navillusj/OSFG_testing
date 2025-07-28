@@ -12,17 +12,20 @@ $error = '';
 function loadUsers() {
     global $users_file, $error;
     if (!file_exists($users_file)) {
-        $error = "User file not found. Cannot manage users.";
+        error_log("Error: users.json not found at $users_file. Cannot load users.");
+        $error = "User database not found. Please re-run the installation script.";
         return ['users' => []];
     }
     $json_content = file_get_contents($users_file);
     if ($json_content === false) {
-        $error = "Failed to read user file. Check permissions.";
+        error_log("Error: Failed to read users.json at $users_file. Check permissions.");
+        $error = "Failed to read user data. Check file permissions.";
         return ['users' => []];
     }
     $data = json_decode($json_content, true);
     if (json_last_error() !== JSON_ERROR_NONE) {
-        $error = "Invalid user file format: " . json_last_error_msg();
+        error_log("Error: Invalid JSON format in users.json: " . json_last_error_msg());
+        $error = "User database corrupted. Invalid JSON format.";
         return ['users' => []];
     }
     return $data;
@@ -32,7 +35,8 @@ function saveUsers($data) {
     global $users_file, $error;
     $json_content = json_encode($data, JSON_PRETTY_PRINT);
     if (file_put_contents($users_file, $json_content) === false) {
-        $error = "Failed to write to user file. Check permissions.";
+        error_log("Error: Failed to write to users.json at $users_file. Check permissions.");
+        $error = "Failed to save user data. Check file permissions.";
         return false;
     }
     return true;
@@ -65,15 +69,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'remove_user') {
     $remove_username = $_POST['remove_username'];
     $new_users = [];
+    $removed = false;
     foreach ($users as $user) {
         if ($user['username'] !== $remove_username) {
             $new_users[] = $user;
+        } else {
+            $removed = true;
         }
     }
-    $users_data['users'] = $new_users;
-    if (saveUsers($users_data)) {
-        $users = $new_users; // Update the local user list
-        $message = "User '{$remove_username}' removed successfully.";
+    if (!$removed) {
+        $error = "User '{$remove_username}' not found.";
+    } elseif (count($new_users) === 0) {
+        $error = "Cannot remove the last user. At least one user must exist.";
+    } else {
+        $users_data['users'] = $new_users;
+        if (saveUsers($users_data)) {
+            $users = $new_users; // Update the local user list
+            $message = "User '{$remove_username}' removed successfully.";
+        }
     }
 }
 
@@ -114,7 +127,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     <div class="container">
         <h1>User Management</h1>
         <a href="settings.php" class="button"><i class="fas fa-arrow-left"></i> Back to Settings</a>
-        <a href="index.php" class="button"><i class="fas fa-arrow-left"></i> Back to Main page</a>
+
         <?php if ($message): ?>
             <div class="message"><?php echo $message; ?></div>
         <?php endif; ?>
