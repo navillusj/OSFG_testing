@@ -1,0 +1,35 @@
+# /etc/netplan/01-network-config.yaml
+network:
+  version: 2
+  renderer: networkd
+  ethernets:
+    # WAN Interface (DHCP from ISP)
+    enp11s0f1:
+      dhcp4: true
+      # You can optionally specify DNS here, but DHCP usually takes care of it.
+      # nameservers:
+      #   addresses: [8.8.8.8, 8.8.4.4] # This would override ISP's DNS for enp11s0f1
+      macaddress: 00:11:22:33:44:55 # Keep your actual MAC address
+
+    # Wired LAN Interfaces (These will be part of the bridge)
+    enp11s0f0:
+      dhcp4: no
+    enp12s0f0:
+      dhcp4: no
+    enp12s0f1:
+      dhcp4: no
+    wlp9s0:
+      dhcp4: no
+
+  bridges:
+    br0:
+      interfaces:
+        - enp11s0f0
+        - enp12s0f0
+        - enp12s0f1
+        - wlp9s0
+      dhcp4: no
+      addresses: [192.168.42.1/24]
+      # This tells the router itself to use 8.8.8.8/8.8.4.4 for its DNS queries
+      nameservers:
+        addresses: [8.8.8.8, 8.8.4.4]
