@@ -1,5 +1,6 @@
 # My Open-Source Firewall
-<img width="1047" height="2213" alt="image" src="https://github.com/user-attachments/assets/2d0ac7f5-3319-44e9-ab44-583db94b5160" />
+<img width="523" height="963" alt="image" src="https://github.com/user-attachments/assets/3ddfef16-8bc5-4a94-b60c-e62b328f0140" />
+
 
 An easy-to-configure, Ubuntu-based firewall/router with a web interface.
 Be  nice to me, only doing this as a hobby :)
@@ -19,13 +20,14 @@ Yes there is AI generatated coding in here, but 99% of all troubleshooting is do
 - **Wi-Fi Access Point:** Configures a wireless access point with WPA2 security.
 - **IP Blocking:** Blocks domains by adding their resolved IPs to an `ipset`.
 - -- Still in progress
-<img width="1057" height="703" alt="image" src="https://github.com/user-attachments/assets/4dabca20-98a9-4d42-879f-9c6536f12f26" />
-<img width="1059" height="1056" alt="image" src="https://github.com/user-attachments/assets/62eee8ba-e372-4ff5-af3f-874e3b1a0f07" />
+<img width="1319" height="1224" alt="image" src="https://github.com/user-attachments/assets/deda446f-9027-418f-a0cb-dc232b967224" />
+
 
 - **Network Statistics:** A web interface to display real-time network traffic statistics.
 - **Login page** added a login page, during setup, installation script will prompt you to create login details.
 - - you can also add your own logo. /var/www/html/logo.png
-    <img width="580" height="1009" alt="image" src="https://github.com/user-attachments/assets/47bb5322-6102-4c8b-b36d-004e666db9f4" />
+<img width="1285" height="901" alt="image" src="https://github.com/user-attachments/assets/cf2bb14b-317c-439e-8896-43d225f2aff2" />
+
 ## Prerequisites
 - A fresh installation of Ubuntu Server (LTS recommended).
 - dos2unix
