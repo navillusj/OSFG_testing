@@ -547,7 +547,6 @@ main() {
     
     # Check for required commands before proceeding, but they will be installed if missing.
     # This check is primarily informative if someone runs it without sudo.
-    # ip, awk, tee, sed, openssl, ipset, iptables, systemctl, dos2unix, ipcalc, jq
     REQUIRED_COMMANDS=(ip awk tee sed openssl ipset iptables systemctl dos2unix ipcalc jq)
     MISSING_COMMANDS=()
     for cmd in "${REQUIRED_COMMANDS[@]}"; do
@@ -560,12 +559,12 @@ main() {
         echo "Notice: Some commands are missing but will be installed during the dependency installation step: ${MISSING_COMMANDS[*]}"
     fi
 
-    setup_login_credentials
     detect_interfaces
     install_dependencies
     configure_system
     generate_configs
-    setup_web_interface
+    setup_web_interface # Copy web files, set permissions for /var/www/html including users.json
+    setup_login_credentials # <--- MOVED TO HERE: Create initial user after web setup and permissions
     configure_services
     run_first_time_scripts
 
