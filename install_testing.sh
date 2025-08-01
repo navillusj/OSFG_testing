@@ -204,6 +204,7 @@ EOF
 install_dependencies() {
     echo "--- Installing required packages ---"
     sudo apt update
+    # Add ipcalc and dos2unix to the installation list
     if [[ "$setup_wifi" == "y" ]]; then
         sudo apt install -y net-tools dnsmasq hostapd wireless-tools iw ipset iptables-persistent apache2 php libapache2-mod-php jq dnsutils ipcalc dos2unix openssl bridge-utils
     else
@@ -327,7 +328,7 @@ listen-address=127.0.0.1,$LAN_IP
 except-interface=$WAN_IFACE
 no-dhcp-interface=$WAN_IFACE
 domain=$LOCAL_DOMAIN
-dhcp-range=$DHCP_START,$DHcp_END,12h
+dhcp-range=$DHCP_START,$DHCP_END,12h
 dhcp-option=3,$LAN_IP
 dhcp-option=6,$LAN_IP
 dhcp-option=1,$NETMASK
@@ -504,6 +505,7 @@ configure_services() {
     sudo chown www-data:www-data /var/lib/misc/dnsmasq.leases # Ensure ownership
     sudo usermod -aG dnsmasq www-data # Add www-data to dnsmasq group
     sudo chmod g+r /var/lib/misc/dnsmasq.leases # Ensure group read access
+    
 }
 
 # --- 6. FIRST-RUN SCRIPT EXECUTION ---
@@ -543,15 +545,19 @@ main() {
         exit 1
     fi
     
-    # Check for required commands
-    if ! command -v ip &>/dev/null || ! command -v awk &>/dev/null || \
-       ! command -v tee &>/dev/null || ! command -v sed &>/dev/null || \
-       ! command -v openssl &>/dev/null || ! command -v ipset &>/dev/null || \
-       ! command -v iptables &>/dev/null || ! command -v systemctl &>/dev/null || \
-       ! command -v dos2unix &>/dev/null || ! command -v ipcalc &>/dev/null; then
-        echo "Error: One or more required commands (ip, awk, tee, sed, openssl, ipset, iptables, systemctl, dos2unix, ipcalc) are not found."
-        echo "Please ensure they are installed or their paths are correct."
-        exit 1
+    # Check for required commands before proceeding, but they will be installed if missing.
+    # This check is primarily informative if someone runs it without sudo.
+    # ip, awk, tee, sed, openssl, ipset, iptables, systemctl, dos2unix, ipcalc, jq
+    REQUIRED_COMMANDS=(ip awk tee sed openssl ipset iptables systemctl dos2unix ipcalc jq)
+    MISSING_COMMANDS=()
+    for cmd in "${REQUIRED_COMMANDS[@]}"; do
+        if ! command -v "$cmd" &>/dev/null; then
+            MISSING_COMMANDS+=("$cmd")
+        fi
+    done
+
+    if [ ${#MISSING_COMMANDS[@]} -ne 0 ]; then
+        echo "Notice: Some commands are missing but will be installed during the dependency installation step: ${MISSING_COMMANDS[*]}"
     fi
 
     setup_login_credentials
