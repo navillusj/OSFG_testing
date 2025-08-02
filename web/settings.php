@@ -84,7 +84,7 @@ if (file_exists($hostapd_conf_path)) {
         left: 0;
         right: 0;
         bottom: 0;
-        background-color: #d9363e; /* Red for off/down */
+        background-color: #d9363e; /* Red for off/down/not member */
         transition: .4s;
         border-radius: 24px; /* Half of height for rounded corners */
     }
@@ -100,7 +100,7 @@ if (file_exists($hostapd_conf_path)) {
         border-radius: 50%;
     }
     input:checked + .slider {
-        background-color: #50c878; /* Green for on/up */
+        background-color: #50c878; /* Green for on/up/is member */
     }
     input:checked + .slider:before {
         transform: translateX(16px); /* Move 16px (width) for 40px switch */
@@ -166,7 +166,7 @@ if (file_exists($hostapd_conf_path)) {
     </div>
 
     <div class="note">
-      <p><strong>Note:</strong> To modify which interfaces are part of the bridge, edit the Netplan YAML (e.g., <code>/etc/netplan/01-network-config.yaml</code>) and run <code>sudo netplan apply</code> via SSH.</p>
+      <p><strong>Note:</strong> Interfaces added/removed from the bridge will persist across reboots via Netplan configuration. Disabling an interface via its toggle is a temporary state change.</p>
     </div>
 
     <h2>Network Interface Overview</h2>
@@ -186,7 +186,7 @@ if (file_exists($hostapd_conf_path)) {
             <th>Interface Name</th>
             <th>Type</th>
             <th>Operational State</th>
-            <th>Traffic Status</th>
+            <th>Bridge Member</th>
             <th>Action</th>
           </tr>
         </thead>
@@ -200,10 +200,10 @@ if (file_exists($hostapd_conf_path)) {
   </div>
 
   <script>
-    let trafficSnapshots = {}; // Stores { ifaceName: { rx: bytes, tx: bytes, timestamp: ms } } for comparison
+    let trafficSnapshots = {};
     let autoRefreshInterval = null;
     const REFRESH_INTERVAL_SECS = 30;
-    const TRAFFIC_SAMPLING_DELAY_MS = 1500; // Delay between initial and second fetch for traffic
+    const TRAFFIC_SAMPLING_DELAY_MS = 1500;
 
     document.addEventListener('DOMContentLoaded', async () => {
       const interfacesTableBody = document.getElementById('interfaces_table_body');
@@ -250,152 +250,182 @@ if (file_exists($hostapd_conf_path)) {
           }));
       }
 
-      async function fetchAndPopulateInterfaces(fetchPhase = 1) { // Phase 1: initial data; Phase 2: traffic comparison
-        if (fetchPhase === 1) {
-            hideFeedbacks();
-            interfacesTableBody.innerHTML = '<tr><td colspan="5" style="text-align: center; color: #888;">Loading interfaces...</td></tr>';
-        }
+      async function fetchAndPopulateInterfaces() { // Simplified to single fetch with internal traffic logic
+        hideFeedbacks();
+        interfacesTableBody.innerHTML = '<tr><td colspan="5" style="text-align: center; color: #888;">Loading interfaces...</td></tr>';
 
         try {
-          const response = await fetch('update_netplan.php?action=get_interfaces');
-          if (!response.ok) {
-            throw new Error(`HTTP ${response.status}`);
-          }
-          const data = await response.json();
+          // First fetch for current state and initial traffic snapshot
+          const response1 = await fetch('update_netplan.php?action=get_interfaces');
+          if (!response1.ok) throw new Error(`HTTP ${response1.status}`);
+          const data1 = await response1.json();
+          if (data1.status !== 'success') throw new Error(`Backend error: ${data1.message}`);
 
-          if (data.status === 'success') {
-            const currentInterfaces = normalizeInterfaces(data.interfaces);
-            const now = new Date().getTime();
+          const interfaces1 = normalizeInterfaces(data1.interfaces);
+          const now1 = new Date().getTime();
+          interfaces1.forEach(iface => {
+              trafficSnapshots[iface.name] = { rx: iface.rx_bytes, tx: iface.tx_bytes, timestamp: now1 };
+          });
 
-            if (fetchPhase === 1) {
-                // Store first snapshot for traffic comparison
-                trafficSnapshots = {};
-                currentInterfaces.forEach(iface => {
-                    trafficSnapshots[iface.name] = { rx: iface.rx_bytes, tx: iface.tx_bytes, timestamp: now };
-                });
-                // Schedule the second fetch for traffic comparison
-                setTimeout(() => fetchAndPopulateInterfaces(2), TRAFFIC_SAMPLING_DELAY_MS);
-                return; // Exit this phase 1 call
-            }
+          // Wait a short period, then fetch again for traffic comparison
+          await new Promise(resolve => setTimeout(resolve, TRAFFIC_SAMPLING_DELAY_MS));
 
-            // --- Phase 2: Populate table with calculated traffic status ---
-            interfacesTableBody.innerHTML = ''; // Clear loading message
+          const response2 = await fetch('update_netplan.php?action=get_interfaces');
+          if (!response2.ok) throw new Error(`HTTP ${response2.status}`);
+          const data2 = await response2.json();
+          if (data2.status !== 'success') throw new Error(`Backend error: ${data2.message}`);
+          
+          const interfaces = normalizeInterfaces(data2.interfaces); // This is the data to display
 
-            if (currentInterfaces.length === 0) {
-              interfacesTableBody.innerHTML = '<tr><td colspan="5" style="text-align: center; color: #888;">No network interfaces detected.</td></tr>';
-            } else {
-              currentInterfaces.forEach(iface => {
-                const row = document.createElement('tr');
+          interfacesTableBody.innerHTML = ''; // Clear loading message
 
-                const nameCell = document.createElement('td');
-                const typeCell = document.createElement('td');
-                const operStateCell = document.createElement('td');
-                const trafficStatusCell = document.createElement('td');
-                const actionCell = document.createElement('td');
-                
-                // Determine Operational State (direct from kernel 'oper_state')
-                const isOperUp = iface.oper_state === 'UP'; // Strict check for 'UP'
-                const operStateText = isOperUp ? 'Active' : iface.oper_state; // Display actual state if not UP
-                const operStateClass = isOperUp ? 'status-up' : 'status-down';
-
-                // Determine Traffic Status based on byte changes
-                let isTrafficActive = false;
-                const prevTraffic = trafficSnapshots[iface.name];
-                if (prevTraffic) {
-                    const rxChange = iface.rx_bytes - prevTraffic.rx;
-                    const txChange = iface.tx_bytes - prevTraffic.tx;
-                    // Consider active if any byte change. A small positive threshold (e.g., 100 bytes) can filter noise.
-                    const TRAFFIC_THRESHOLD_BYTES = 100; // Small threshold to count as "traffic"
-                    if (rxChange > TRAFFIC_THRESHOLD_BYTES || txChange > TRAFFIC_THRESHOLD_BYTES) {
-                        isTrafficActive = true;
-                    }
-                }
-                const trafficStatusText = isTrafficActive ? 'Transmitting' : 'No Traffic';
-                const trafficStatusClass = isTrafficActive ? 'status-up' : 'status-down';
-
-                nameCell.innerHTML = `<i class="fas fa-network-wired" style="margin-right:8px;"></i> ${iface.name}`;
-                typeCell.textContent = iface.type_label;
-                operStateCell.innerHTML = `<span class="${operStateClass}">${operStateText}</span>`;
-                trafficStatusCell.innerHTML = `<span class="${trafficStatusClass}">${trafficStatusText}</span>`;
-
-                // Create toggle switch
-                const isCriticalInterface = iface.is_wan || iface.is_system;
-                const toggleChecked = isOperUp ? 'checked' : ''; // Toggle state based on oper_state
-                const toggleDisabled = isCriticalInterface ? 'disabled' : '';
-
-                actionCell.innerHTML = `
-                    <label class="switch">
-                        <input type="checkbox" data-interface="${iface.name}" ${toggleChecked} ${toggleDisabled}>
-                        <span class="slider round"></span>
-                    </label>
-                `;
-                
-                row.appendChild(nameCell);
-                row.appendChild(typeCell);
-                row.appendChild(operStateCell);
-                row.appendChild(trafficStatusCell);
-                row.appendChild(actionCell);
-                
-                interfacesTableBody.appendChild(row);
-              });
-              
-              // Add event listeners for toggles (only once after table is built)
-              // Ensure we don't re-add listeners on every refresh to prevent duplicates
-              if (!interfacesTableBody.dataset.listenersAdded) {
-                document.querySelectorAll('.interfaces-table input[type="checkbox"]').forEach(toggle => {
-                  toggle.addEventListener('change', async (event) => {
-                    const interfaceName = event.target.dataset.interface;
-                    const newState = event.target.checked ? 'up' : 'down';
-
-                    if (!confirm(`Are you sure you want to set interface '${interfaceName}' to '${newState.toUpperCase()}'? This may disrupt network connectivity.`)) {
-                        event.target.checked = !event.target.checked;
-                        return;
-                    }
-
-                    try {
-                      showFeedback(interfaceOverviewMessage, `Setting ${interfaceName} to ${newState.toUpperCase()}...`, 'message');
-                      hideFeedbacks();
-
-                      const response = await fetch('update_netplan.php?action=set_interface_state', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                        body: `interface=${encodeURIComponent(interfaceName)}&state=${encodeURIComponent(newState)}`
-                      });
-                      const data = await response.json();
-
-                      if (data.status === 'success') {
-                        showFeedback(interfaceOverviewMessage, data.message, 'message');
-                        // After state change, force a full refresh (Phase 1) to re-evaluate activity
-                        await fetchAndPopulateInterfaces(1); 
-                      } else {
-                        showFeedback(interfaceOverviewError, data.message, 'error');
-                        event.target.checked = !event.target.checked;
-                      }
-                    } catch (error) {
-                      console.error('Error setting interface state:', error);
-                      showFeedback(interfaceOverviewError, 'Network error or server unavailable when setting interface state.', 'error');
-                      event.target.checked = !event.target.checked;
-                    }
-                  });
-                });
-                interfacesTableBody.dataset.listenersAdded = 'true'; // Mark listeners as added
-              }
-            }
+          if (interfaces.length === 0) {
+            interfacesTableBody.innerHTML = '<tr><td colspan="5" style="text-align: center; color: #888;">No network interfaces detected.</td></tr>';
           } else {
-            showFeedback(interfaceOverviewError, `Failed to load interfaces: ${data.message || 'unknown error'}`, 'error');
-            interfacesTableBody.innerHTML = `<tr><td colspan="5" style="text-align: center; color: #d9363e;">Error: ${data.message || 'unknown'}</td></tr>`;
+            interfaces.forEach(iface => {
+              const row = document.createElement('tr');
+
+              const nameCell = document.createElement('td');
+              const typeCell = document.createElement('td');
+              const operStateCell = document.createElement('td');
+              const bridgeMemberCell = document.createElement('td'); // Cell for bridge membership
+              const actionCell = document.createElement('td');
+              
+              // Determine Operational State
+              const isOperUp = iface.oper_state === 'UP';
+              const operStateText = isOperUp ? 'Active' : iface.oper_state; // Show actual state if not UP
+              const operStateClass = isOperUp ? 'status-up' : 'status-down';
+
+              // Determine Traffic Status based on byte changes from trafficSnapshots
+              let isTrafficActive = false;
+              const prevTraffic = trafficSnapshots[iface.name];
+              if (prevTraffic) {
+                  const rxChange = iface.rx_bytes - prevTraffic.rx;
+                  const txChange = iface.tx_bytes - prevTraffic.tx;
+                  const TRAFFIC_THRESHOLD_BYTES = 100; // Small threshold to count as "traffic"
+                  if (rxChange > TRAFFIC_THRESHOLD_BYTES || txChange > TRAFFIC_THRESHOLD_BYTES) {
+                      isTrafficActive = true;
+                  }
+              }
+              const trafficStatusText = isTrafficActive ? 'Transmitting' : 'No Traffic';
+              const trafficStatusClass = isTrafficActive ? 'status-up' : 'status-down';
+
+
+              nameCell.innerHTML = `<i class="fas fa-network-wired" style="margin-right:8px;"></i> ${iface.name}`;
+              typeCell.textContent = iface.type_label;
+              operStateCell.innerHTML = `<span class="${operStateClass}">${operStateText}</span>`;
+              
+              // Bridge Member Toggle
+              const isCriticalForBridge = iface.is_wan || iface.is_system;
+              const bridgeToggleChecked = iface.is_bridged ? 'checked' : '';
+              const bridgeToggleDisabled = isCriticalForBridge ? 'disabled' : '';
+
+              bridgeMemberCell.innerHTML = `
+                  <label class="switch">
+                      <input type="checkbox" data-interface="${iface.name}" data-action-type="bridge" ${bridgeToggleChecked} ${bridgeToggleDisabled}>
+                      <span class="slider round"></span>
+                  </label>
+              `;
+
+              // Operational State Toggle (Action Column)
+              const isCriticalForOperState = iface.is_wan || iface.is_system;
+              const operStateToggleChecked = isOperUp ? 'checked' : '';
+              const operStateToggleDisabled = isCriticalForOperState ? 'disabled' : '';
+
+              actionCell.innerHTML = `
+                  <label class="switch">
+                      <input type="checkbox" data-interface="${iface.name}" data-action-type="operstate" ${operStateToggleChecked} ${operStateToggleDisabled}>
+                      <span class="slider round"></span>
+                  </label>
+              `;
+              
+              row.appendChild(nameCell);
+              row.appendChild(typeCell);
+              row.appendChild(operStateCell);
+              row.appendChild(bridgeMemberCell); // Append bridge member cell
+              row.appendChild(actionCell); // Append operational state action cell
+              
+              interfacesTableBody.appendChild(row);
+            });
+            
+            // Add event listeners for all toggles
+            // Clear existing listeners to prevent duplicates on refresh
+            document.querySelectorAll('.interfaces-table input[type="checkbox"]').forEach(oldToggle => {
+                oldToggle.removeEventListener('change', handleToggleChange);
+            });
+            document.querySelectorAll('.interfaces-table input[type="checkbox"]').forEach(newToggle => {
+                newToggle.addEventListener('change', handleToggleChange);
+            });
           }
         } catch (err) {
-          console.error('Network error fetching interfaces:', err);
-          showFeedback(interfaceOverviewError, 'Network error or server unavailable when fetching interfaces.', 'error');
-          interfacesTableBody.innerHTML = '<tr><td colspan="5" style="text-align: center; color: #d9363e;">Network Error</td></tr>';
+          console.error('Network error or backend issue fetching interfaces:', err);
+          showFeedback(interfaceOverviewError, `Error fetching interfaces: ${err.message}`, 'error');
+          interfacesTableBody.innerHTML = `<tr><td colspan="5" style="text-align: center; color: #d9363e;">Error: ${err.message}</td></tr>`;
         }
+      }
+      
+      // Centralized event handler for toggles
+      async function handleToggleChange(event) {
+          const interfaceName = event.target.dataset.interface;
+          const actionType = event.target.dataset.actionType;
+          let successMessage = '';
+          let errorMessage = '';
+          let apiAction = '';
+          let postBody = '';
+
+          if (actionType === 'operstate') {
+            const newState = event.target.checked ? 'up' : 'down';
+            if (!confirm(`Are you sure you want to set interface '${interfaceName}' to '${newState.toUpperCase()}'? This may disrupt network connectivity.`)) {
+                event.target.checked = !event.target.checked;
+                return;
+            }
+            apiAction = 'set_interface_state';
+            postBody = `interface=${encodeURIComponent(interfaceName)}&state=${encodeURIComponent(newState)}`;
+            successMessage = `Interface '${interfaceName}' set to '${newState.toUpperCase()}' successfully.`;
+            errorMessage = `Failed to set interface '${interfaceName}' to '${newState.toUpperCase()}'.`;
+          } else if (actionType === 'bridge') {
+            const newMembership = event.target.checked ? 'add' : 'remove';
+            if (!confirm(`Are you sure you want to ${newMembership} interface '${interfaceName}' ${newMembership === 'add' ? 'to' : 'from'} the bridge (br0)? This will apply Netplan changes and may briefly disrupt network connectivity.`)) {
+                event.target.checked = !event.target.checked;
+                return;
+            }
+            apiAction = 'set_bridge_membership';
+            postBody = `interface=${encodeURIComponent(interfaceName)}&action_type=${encodeURIComponent(newMembership)}`;
+            successMessage = `Interface '${interfaceName}' ${newMembership === 'add' ? 'added to' : 'removed from'} bridge successfully.`;
+            errorMessage = `Failed to ${newMembership} interface '${interfaceName}' ${newMembership === 'add' ? 'to' : 'from'} bridge.`;
+          } else {
+              return; // Unknown action type
+          }
+
+          try {
+            showFeedback(interfaceOverviewMessage, `Processing ${interfaceName}...`, 'message');
+            hideFeedbacks();
+
+            const response = await fetch(`update_netplan.php?action=${apiAction}`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+              body: postBody
+            });
+            const data = await response.json();
+
+            if (data.status === 'success') {
+              showFeedback(interfaceOverviewMessage, data.message || successMessage, 'message');
+              await fetchAndPopulateInterfaces(); // Re-fetch after successful action
+            } else {
+              showFeedback(interfaceOverviewError, data.message || errorMessage, 'error');
+              event.target.checked = !event.target.checked;
+            }
+          } catch (error) {
+            console.error('Error in interface action:', error);
+            showFeedback(interfaceOverviewError, 'Network error or server unavailable when performing action.', 'error');
+            event.target.checked = !event.target.checked;
+          }
       }
 
       // --- Auto-refresh controls ---
       function startAutoRefresh() {
           if (autoRefreshInterval) clearInterval(autoRefreshInterval);
-          autoRefreshInterval = setInterval(() => fetchAndPopulateInterfaces(1), REFRESH_INTERVAL_SECS * 1000); // Always start with Phase 1
+          autoRefreshInterval = setInterval(() => fetchAndPopulateInterfaces(), REFRESH_INTERVAL_SECS * 1000);
           toggleAutoRefreshBtn.innerHTML = '<i class="fas fa-pause"></i> Pause Auto-Refresh';
           refreshStatusSpan.textContent = `Auto-refresh: Active (${REFRESH_INTERVAL_SECS}s)`;
           toggleAutoRefreshBtn.classList.remove('paused');
@@ -410,10 +440,9 @@ if (file_exists($hostapd_conf_path)) {
       }
 
       refreshNowBtn.addEventListener('click', () => {
-          stopAutoRefresh(); // Pause auto-refresh on manual trigger
-          fetchAndPopulateInterfaces(1); // Trigger immediate refresh (Phase 1)
-          // Resume auto-refresh after a short delay to allow manual refresh cycle to complete
-          setTimeout(startAutoRefresh, 5000); // Resume after 5 seconds
+          stopAutoRefresh();
+          fetchAndPopulateInterfaces(); // Immediate refresh
+          setTimeout(startAutoRefresh, 5000); // Resume auto-refresh after 5 seconds
       });
 
       toggleAutoRefreshBtn.addEventListener('click', () => {
