@@ -250,7 +250,7 @@ if (file_exists($hostapd_conf_path)) {
           }));
       }
 
-      async function fetchAndPopulateInterfaces() { // Simplified to single fetch with internal traffic logic
+      async function fetchAndPopulateInterfaces() {
         hideFeedbacks();
         interfacesTableBody.innerHTML = '<tr><td colspan="5" style="text-align: center; color: #888;">Loading interfaces...</td></tr>';
 
@@ -288,28 +288,13 @@ if (file_exists($hostapd_conf_path)) {
               const nameCell = document.createElement('td');
               const typeCell = document.createElement('td');
               const operStateCell = document.createElement('td');
-              const bridgeMemberCell = document.createElement('td'); // Cell for bridge membership
+              const bridgeMemberCell = document.createElement('td');
               const actionCell = document.createElement('td');
               
               // Determine Operational State
               const isOperUp = iface.oper_state === 'UP';
-              const operStateText = isOperUp ? 'Active' : iface.oper_state; // Show actual state if not UP
+              const operStateText = isOperUp ? 'Active' : iface.oper_state;
               const operStateClass = isOperUp ? 'status-up' : 'status-down';
-
-              // Determine Traffic Status based on byte changes from trafficSnapshots
-              let isTrafficActive = false;
-              const prevTraffic = trafficSnapshots[iface.name];
-              if (prevTraffic) {
-                  const rxChange = iface.rx_bytes - prevTraffic.rx;
-                  const txChange = iface.tx_bytes - prevTraffic.tx;
-                  const TRAFFIC_THRESHOLD_BYTES = 100; // Small threshold to count as "traffic"
-                  if (rxChange > TRAFFIC_THRESHOLD_BYTES || txChange > TRAFFIC_THRESHOLD_BYTES) {
-                      isTrafficActive = true;
-                  }
-              }
-              const trafficStatusText = isTrafficActive ? 'Transmitting' : 'No Traffic';
-              const trafficStatusClass = isTrafficActive ? 'status-up' : 'status-down';
-
 
               nameCell.innerHTML = `<i class="fas fa-network-wired" style="margin-right:8px;"></i> ${iface.name}`;
               typeCell.textContent = iface.type_label;
@@ -342,14 +327,14 @@ if (file_exists($hostapd_conf_path)) {
               row.appendChild(nameCell);
               row.appendChild(typeCell);
               row.appendChild(operStateCell);
-              row.appendChild(bridgeMemberCell); // Append bridge member cell
-              row.appendChild(actionCell); // Append operational state action cell
+              row.appendChild(bridgeMemberCell);
+              row.appendChild(actionCell);
               
               interfacesTableBody.appendChild(row);
             });
             
             // Add event listeners for all toggles
-            // Clear existing listeners to prevent duplicates on refresh
+            // Remove existing listeners to prevent duplicates on refresh
             document.querySelectorAll('.interfaces-table input[type="checkbox"]').forEach(oldToggle => {
                 oldToggle.removeEventListener('change', handleToggleChange);
             });
