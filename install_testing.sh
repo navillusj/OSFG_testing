@@ -437,6 +437,52 @@ EOF
 \$wan_interface = '$WAN_IFACE';
 ?>
 EOF
+
+    echo "--- Creating check_device_status.php script ---"
+    # This script is called by JavaScript to perform ping checks
+    cat <<'EOF' | sudo tee /var/www/html/check_device_status.php > /dev/null
+<?php
+// check_device_status.php
+header('Content-Type: application/json');
+
+session_start(); // Ensure session is started for authentication check
+if (!isset($_SESSION['logged_in']) || $_SESSION['logged_in'] !== true) {
+    http_response_code(401); // Unauthorized
+    echo json_encode(['status' => 'error', 'message' => 'Unauthorized access']);
+    exit();
+}
+
+function secure_shell_exec_no_log($command) {
+    // This variant is for a rapid-fire check, avoids excessive logging for pings
+    $output = shell_exec($command . ' 2>&1');
+    return trim($output);
+}
+
+if (isset($_GET['ip'])) {
+    $ip = escapeshellarg($_GET['ip']); // Sanitize input
+    // Use full path to ping for robustness. Common paths are /bin/ping or /usr/bin/ping.
+    // Verify on your system: `which ping`
+    $ping_command = "/bin/ping -c 1 -W 1 $ip"; 
+    $ping_output = secure_shell_exec_no_log($ping_command);
+
+    if (strpos($ping_output, ' 0% packet loss') !== false) {
+        echo json_encode(['status' => 'online']);
+    } else {
+        // Also check if ping command itself failed (e.g. permission denied)
+        if (strpos($ping_output, 'Operation not permitted') !== false || strpos($ping_output, 'unknown host') !== false || strpos($ping_output, 'ping: sendmsg: Operation not permitted') !== false) {
+             error_log("Ping command failed for IP $ip: $ping_output"); // Log the specific error
+             echo json_encode(['status' => 'error', 'message' => 'Ping command error: ' . $ping_output]);
+        } else {
+            echo json_encode(['status' => 'offline']);
+        }
+    }
+} else {
+    echo json_encode(['status' => 'error', 'message' => 'No IP provided']);
+}
+?>
+EOF
+    sudo chown www-data:www-data /var/www/html/check_device_status.php
+    sudo chmod 644 /var/www/html/check_device_status.php
 }
 
 setup_web_interface() {
@@ -470,7 +516,10 @@ setup_web_interface() {
     echo "Adding sudo rule for www-data to run scripts..."
     # Ensure the sudoers.d directory exists
     sudo mkdir -p /etc/sudoers.d/
-    echo "www-data ALL=(root) NOPASSWD: /usr/local/bin/update_blocked_ips.sh, /usr/sbin/ipset add no_internet_access *, /usr/sbin/ipset del no_internet_access *, /usr/sbin/ipset flush no_internet_access, /usr/local/bin/update_hostapd.sh, /usr/bin/systemctl restart hostapd" | sudo tee /etc/sudoers.d/www-data_firewall > /dev/null
+    # Ensure /bin/ping is included if you use the setuid method, or cap_net_raw
+    # For robust ping, `setcap` is preferred, so this sudo rule isn't strictly needed for ping if setcap is used.
+    # However, for consistency and if setcap fails, keeping ping here is a fallback.
+    echo "www-data ALL=(root) NOPASSWD: /usr/local/bin/update_blocked_ips.sh, /usr/sbin/ipset add no_internet_access *, /usr/sbin/ipset del no_internet_access *, /usr/sbin/ipset flush no_internet_access, /usr/local/bin/update_hostapd.sh, /usr/bin/systemctl restart hostapd, /bin/ping" | sudo tee /etc/sudoers.d/www-data_firewall > /dev/null
     sudo chmod 0440 /etc/sudoers.d/www-data_firewall
     
     echo "Setting permissions for dnsmasq.leases file..."
@@ -506,6 +555,18 @@ configure_services() {
     sudo usermod -aG dnsmasq www-data # Add www-data to dnsmasq group
     sudo chmod g+r /var/lib/misc/dnsmasq.leases # Ensure group read access
     
+    # Set capabilities for ping if not already done. This is the preferred method.
+    if command -v setcap &>/dev/null; then
+        PING_PATH=$(which ping)
+        if [ -n "$PING_PATH" ]; then
+            echo "Attempting to set CAP_NET_RAW capability for $PING_PATH..."
+            sudo setcap cap_net_raw+ep "$PING_PATH" || echo "Warning: Failed to set CAP_NET_RAW capability for $PING_PATH. Ping might still require sudo if not already configured." >&2
+        else
+            echo "Warning: 'ping' command not found, cannot set CAP_NET_RAW capability." >&2
+        fi
+    else
+        echo "Warning: 'setcap' command not found. Please install 'libcap2-bin' for proper ping permissions." >&2
+    fi
 }
 
 # --- 6. FIRST-RUN SCRIPT EXECUTION ---
@@ -563,8 +624,8 @@ main() {
     install_dependencies
     configure_system
     generate_configs
-    setup_web_interface # Copy web files, set permissions for /var/www/html including users.json
-    setup_login_credentials # <--- MOVED TO HERE: Create initial user after web setup and permissions
+    setup_web_interface # Copies web files, sets permissions for /var/www/html including users.json
+    setup_login_credentials # Creates initial user AFTER web setup and permissions are in place
     configure_services
     run_first_time_scripts
 
