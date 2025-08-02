@@ -22,6 +22,55 @@ if (!isset($wan_interface)) {
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css" integrity="sha512-SnH5WK+bZxgPHs44uWIX+LLJAJ9/2PkPKZ5QiAj6Ta86w+fsb2TkcmfRyVX3pBnMFcV7oQPJkl9QevSCWr3W6A==" crossorigin="anonymous" referrerpolicy="no-referrer" />
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet">
+    <style>
+        /* Styles for toggle switch (copied from settings.php) - RETAINED if other parts use it */
+        .switch {
+            position: relative;
+            display: inline-block;
+            width: 40px;
+            height: 24px;
+        }
+        .switch input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+        .slider {
+            position: absolute;
+            cursor: pointer;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: #d9363e;
+            transition: .4s;
+            border-radius: 24px;
+        }
+        .slider:before {
+            position: absolute;
+            content: "";
+            height: 16px;
+            width: 16px;
+            left: 4px;
+            bottom: 4px;
+            background-color: white;
+            transition: .4s;
+            border-radius: 50%;
+        }
+        input:checked + .slider {
+            background-color: #50c878;
+        }
+        input:checked + .slider:before {
+            transform: translateX(16px);
+        }
+        .status-text {
+            font-weight: bold;
+            margin-left: 8px;
+            vertical-align: middle;
+        }
+        .status-up { color: #50c878; }
+        .status-down { color: #d9363e; }
+    </style>
 </head>
 <body>
     <div class="container">
@@ -30,6 +79,7 @@ if (!isset($wan_interface)) {
         <a href="view_network_stats.php" class="button"><i class="fas fa-chart-line"></i> View Network Stats</a>
         <a href="access_control.php" class="button"><i class="fas fa-user-shield"></i> Access Control</a>
         <a href="settings.php" class="button"><i class="fas fa-cog"></i> Settings</a>
+        <a href="logs.php" class="button"><i class="fas fa-file-alt"></i> View Logs</a>
         <a href="logout.php" class="button" style="background-color: #d9363e;"><i class="fas fa-sign-out-alt"></i> Logout</a>
 
         <div class="note">
@@ -78,66 +128,6 @@ if (!isset($wan_interface)) {
                 $gateway = secure_shell_exec("ip route | grep default | awk '{print \$3}'", 'default_gateway');
                 echo !empty($gateway) ? htmlspecialchars($gateway) : "Not found.";
             ?></pre>
-        </div>
-
-        <h2>Network Interfaces</h2>
-        <div class="grid">
-            <?php
-            // Dynamically build the interfaces array
-            $interfaces = [
-                'lo'          => 'Loopback',
-                $wan_interface => 'WAN Interface (Internet)',
-                'br0'         => 'LAN Bridge (Internal Network)',
-            ];
-            
-            // This is a more robust way to get all active interfaces
-            $all_interfaces_output = secure_shell_exec("ip -o link show | awk -F': ' '{print \$2}' | grep -v 'lo'", 'all_interfaces');
-            $all_interfaces_array = explode(' ', $all_interfaces_output);
-            
-            foreach ($all_interfaces_array as $iface) {
-                if (!isset($interfaces[$iface])) {
-                    $interfaces[$iface] = 'Other Interface';
-                }
-            }
-
-            $ip_output = secure_shell_exec('ip -4 -json a', 'ip_addresses');
-            $ip_data = json_decode($ip_output, true);
-
-            if (json_last_error() !== JSON_ERROR_NONE || !is_array($ip_data)) {
-                echo '<div class="error">Error decoding IP address information.</div>';
-                $ip_data = [];
-            }
-
-            foreach ($interfaces as $iface_name => $description) {
-                $ip_address = 'N/A';
-                $status = 'Down';
-                $status_class = 'status-down';
-
-                foreach ($ip_data as $iface_info) {
-                    if (isset($iface_info['ifname']) && $iface_info['ifname'] === $iface_name) {
-                        if (isset($iface_info['operstate']) && $iface_info['operstate'] === 'UP') {
-                           $status = 'Up';
-                           $status_class = 'status-up';
-                        }
-                        if (isset($iface_info['addr_info']) && is_array($iface_info['addr_info'])) {
-                            foreach ($iface_info['addr_info'] as $addr) {
-                                if (isset($addr['family']) && $addr['family'] === 'inet' && isset($addr['local'])) {
-                                    $ip_address = $addr['local'] . '/' . ($addr['prefixlen'] ?? 'N/A');
-                                    break;
-                                }
-                            }
-                        }
-                        break;
-                    }
-                }
-            ?>
-            <div class="card">
-                <h3><i class="fas fa-ethernet"></i> <?php echo htmlspecialchars($iface_name); ?></h3>
-                <p><?php echo htmlspecialchars($description); ?></p>
-                <p><strong>Status:</strong> <span class="<?php echo $status_class; ?>"><?php echo htmlspecialchars($status); ?></span></p>
-                <p><strong>IP Address:</strong> <?php echo htmlspecialchars($ip_address); ?></p>
-            </div>
-            <?php } ?>
         </div>
 
         <h2>Active Network Connections (TCP/UDP)</h2>
@@ -198,102 +188,104 @@ if (!isset($wan_interface)) {
     </footer>
 
     <script>
-        const dhcpLeases = <?php echo json_encode($leases_data_for_js); ?>;
+    // Interface Overview JavaScript (REMOVED from here, if you want it on dashboard, keep it)
+    // Removed all interface table related JS (trafficSnapshots, autoRefreshInterval, fetchAndPopulateInterfaces, handleToggleChange, refresh controls)
+    // As it's intended to be removed from index.php
 
-        function formatTimeRemaining(seconds) {
-            if (seconds <= 0) {
-                return "Expired";
+    // DHCP Leases JavaScript (Original from index.php)
+    const dhcpLeases = <?php echo json_encode($leases_data_for_js); ?>;
+
+    function formatTimeRemaining(seconds) {
+        if (seconds <= 0) {
+            return "Expired";
+        }
+        const d = Math.floor(seconds / (3600 * 24));
+        const h = Math.floor((seconds % (3600 * 24)) / 3600);
+        const m = Math.floor((seconds % 3600) / 60);
+        const s = Math.floor(seconds % 60);
+
+        let parts = [];
+        if (d > 0) parts.push(d + "d");
+        if (h > 0) parts.push(h + "h");
+        if (m > 0) parts.push(m + "m");
+        if (s > 0 || parts.length === 0) parts.push(s + "s");
+        
+        return parts.join(" ");
+    }
+
+    function updateCountdowns() {
+        const countdownElements = document.querySelectorAll('.lease-countdown');
+        countdownElements.forEach(el => {
+            const expiryTimestamp = parseInt(el.dataset.timestamp) * 1000;
+            const now = new Date().getTime();
+            const timeLeft = expiryTimestamp - now;
+
+            if (timeLeft <= 0) {
+                el.textContent = "Expired";
+                el.closest('.dhcp-card').classList.add('status-expired');
+                el.closest('.dhcp-card').classList.remove('status-online', 'status-offline');
+            } else {
+                const secondsRemaining = Math.floor(timeLeft / 1000);
+                el.textContent = formatTimeRemaining(secondsRemaining);
             }
-            const d = Math.floor(seconds / (3600 * 24));
-            const h = Math.floor((seconds % (3600 * 24)) / 3600);
-            const m = Math.floor((seconds % 3600) / 60);
-            const s = Math.floor(seconds % 60);
+        });
+    }
 
-            let parts = [];
-            if (d > 0) parts.push(d + "d");
-            if (h > 0) parts.push(h + "h");
-            if (m > 0) parts.push(m + "m");
-            if (s > 0 || parts.length === 0) parts.push(s + "s");
-            
-            return parts.join(" ");
+    async function checkDeviceStatus(ip, cardElement) {
+        const statusSpan = cardElement.querySelector('.device-status');
+        const currentStatusClass = statusSpan.classList;
+
+        if (cardElement.classList.contains('status-expired')) {
+            statusSpan.textContent = 'Lease Expired';
+            return;
         }
 
-        function updateCountdowns() {
-            const countdownElements = document.querySelectorAll('.lease-countdown');
-            countdownElements.forEach(el => {
-                const expiryTimestamp = parseInt(el.dataset.timestamp) * 1000;
-                const now = new Date().getTime();
-                const timeLeft = expiryTimestamp - now;
+        statusSpan.textContent = 'Checking...';
+        currentStatusClass.remove('status-online', 'status-offline');
 
-                if (timeLeft <= 0) {
-                    el.textContent = "Expired";
-                    el.closest('.dhcp-card').classList.add('status-expired');
-                    el.closest('.dhcp-card').classList.remove('status-online', 'status-offline');
-                } else {
-                    const secondsRemaining = Math.floor(timeLeft / 1000);
-                    el.textContent = formatTimeRemaining(secondsRemaining);
-                }
-            });
-        }
+        try {
+            const response = await fetch(`check_device_status.php?ip=${ip}`);
+            const data = await response.json();
 
-        async function checkDeviceStatus(ip, cardElement) {
-            const statusSpan = cardElement.querySelector('.device-status');
-            const currentStatusClass = cardElement.querySelector('.device-status').closest('p').querySelector('span').classList;
-
-            if (cardElement.classList.contains('status-expired')) {
-                statusSpan.textContent = 'Lease Expired';
-                return;
-            }
-
-            statusSpan.textContent = 'Checking...';
-            currentStatusClass.remove('status-online', 'status-offline');
-
-            try {
-                const response = await fetch(`check_device_status.php?ip=${ip}`);
-                const data = await response.json();
-
-                if (data.status === 'online') {
-                    statusSpan.textContent = 'Online';
-                    currentStatusClass.add('status-online');
-                    cardElement.classList.remove('status-offline');
-                    cardElement.classList.add('status-online');
-                    cardElement.style.borderLeftColor = '#50c878';
-                } else {
-                    statusSpan.textContent = 'Offline';
-                    currentStatusClass.add('status-offline');
-                    cardElement.classList.remove('status-online');
-                    cardElement.classList.add('status-offline');
-                    cardElement.style.borderLeftColor = '#d9363e';
-                }
-            } catch (error) {
-                console.error('Error checking device status:', error);
-                statusSpan.textContent = 'Error';
+            if (data.status === 'online') {
+                statusSpan.textContent = 'Online';
+                currentStatusClass.add('status-online');
+                cardElement.classList.remove('status-offline');
+                cardElement.classList.add('status-online');
+                cardElement.style.borderLeftColor = '#50c878';
+            } else {
+                statusSpan.textContent = 'Offline';
                 currentStatusClass.add('status-offline');
                 cardElement.classList.remove('status-online');
                 cardElement.classList.add('status-offline');
                 cardElement.style.borderLeftColor = '#d9363e';
             }
+        } catch (error) {
+            console.error('Error checking device status:', error);
+            statusSpan.textContent = 'Error';
+            currentStatusClass.add('status-offline');
+            cardElement.classList.remove('status-online');
+            cardElement.classList.add('status-offline');
+            cardElement.style.borderLeftColor = '#d9363e';
         }
+    }
 
-        document.addEventListener('DOMContentLoaded', () => {
-            updateCountdowns();
-
-            const dhcpCards = document.querySelectorAll('.dhcp-card');
-
+    window.addEventListener('load', () => {
+        updateCountdowns();
+        const dhcpCards = document.querySelectorAll('.dhcp-card');
+        dhcpCards.forEach(card => {
+            const ip = card.dataset.ip;
+            checkDeviceStatus(ip, card);
+        });
+        setInterval(updateCountdowns, 1000);
+        setInterval(() => {
             dhcpCards.forEach(card => {
                 const ip = card.dataset.ip;
                 checkDeviceStatus(ip, card);
             });
+        }, 30000);
+    });
 
-            setInterval(updateCountdowns, 1000);
-
-            setInterval(() => {
-                dhcpCards.forEach(card => {
-                    const ip = card.dataset.ip;
-                    checkDeviceStatus(ip, card);
-                });
-            }, 30000);
-        });
     </script>
 </body>
 </html>
