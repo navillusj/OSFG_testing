@@ -21,10 +21,9 @@ function secure_shell_exec_with_log($command, $log_context = 'general') {
     global $sudo_cmd_path;
 
     $full_command = $command;
-    // Ensure sudo is called with its full path if present
     if (str_starts_with($command, 'sudo ') && !str_starts_with($command, "{$sudo_cmd_path}")) {
         $full_command = "{$sudo_cmd_path} " . substr($command, 5);
-    } elseif (str_starts_with($command, "{$sudo_cmd_path}") && strpos($command, ' ') === false) { // Handle just "sudo" as command
+    } elseif (str_starts_with($command, "{$sudo_cmd_path}") && strpos($command, ' ') === false) {
         $full_command = $sudo_cmd_path;
     }
 
@@ -140,7 +139,7 @@ function get_netplan_interfaces($yq_path, $config_file) {
     }
 
     $output_lines = []; $return_var = 0;
-    $command_str = "{$sudo_cmd_path} {$yq_path} '.network.ethernets | keys' " . escapeshellarg($config_file); // Pass file directly
+    $command_str = "{$sudo_cmd_path} {$yq_path} '.network.ethernets | keys' " . escapeshellarg($config_file);
     
     error_log(sprintf("[%s] DEBUG: Executing yq get_defined_interfaces command: %s", date('Y-m-d H:i:s'), $command_str));
     exec($command_str . ' 2>&1', $output_lines, $return_var);
@@ -171,7 +170,7 @@ function get_bridge_interfaces($yq_path, $config_file, $bridge_name = 'br0') {
         return [];
     }
     $output_lines = []; $return_var = 0;
-    $command_str = "{$sudo_cmd_path} {$yq_path} '.network.bridges[\"{$bridge_name}\"].interfaces[]' " . escapeshellarg($config_file); // Pass file directly
+    $command_str = "{$sudo_cmd_path} {$yq_path} '.network.bridges[\"{$bridge_name}\"].interfaces[]' " . escapeshellarg($config_file);
     
     error_log(sprintf("[%s] DEBUG: Executing yq get_bridge_interfaces command: %s", date('Y-m-d H:i:s'), $command_str));
     exec($command_str . ' 2>&1', $output_lines, $return_var);
