@@ -11,9 +11,9 @@ if (!isset($_SESSION['logged_in']) || $_SESSION['logged_in'] !== true) {
 $netplan_config_file = '/etc/netplan/01-network-config.yaml';
 $netplan_backup_file = '/etc/netplan/01-network-config.yaml.bak';
 $yq_path = '/usr/local/bin/yq'; // Ensure this path is correct based on 'which yq'
-$ping_path = '/bin/ping'; // Ensure this path is correct based on 'which ping'
-$netplan_cmd_path = '/usr/sbin/netplan'; // Ensure this path is correct based on 'which netplan'
-$tee_cmd_path = '/usr/bin/tee'; // Ensure this path is correct based on 'which tee'
+$ping_path = '/bin/ping';
+$netplan_cmd_path = '/usr/sbin/netplan';
+$tee_cmd_path = '/usr/bin/tee';
 $ip_cmd_path = '/usr/sbin/ip'; // Path for ip command
 
 function secure_shell_exec_with_log($command, $log_context = 'netplan_mgmt') {
@@ -29,23 +29,77 @@ function secure_shell_exec_with_log($command, $log_context = 'netplan_mgmt') {
 // --- Helper Functions to Interact with Netplan YAML using yq ---
 
 function get_all_detected_interfaces_system($ip_cmd_path) {
-    // Get all interfaces including lo and br0 for full listing, and their operational state
-    $command = "{$ip_cmd_path} -o link show | awk -F': ' '{print \$2 \"|\" \$9}'"; // Output: interface_name|operstate
-    $output = secure_shell_exec_with_log($command, 'get_all_interfaces_full_with_state');
-    if (empty($output) || strpos($output, 'Error:') !== false) {
+    // --- REVISED AWK PARSING FOR IP LINK SHOW ---
+    // This command gets multi-line output then processes it to extract fields more reliably.
+    // It specifically looks for 'state', 'RX: bytes', and 'TX: bytes' lines.
+    $command = "{$ip_cmd_path} -s link show"; // Use non-one-line output for easier multi-line parsing
+    $raw_output = secure_shell_exec_with_log($command, 'get_all_interfaces_full_with_state_and_traffic_raw');
+    
+    error_log(sprintf("[%s] DEBUG: Raw ip link show output:\n%s", date('Y-m-d H:i:s'), $raw_output));
+
+    if (empty($raw_output) || strpos($raw_output, 'Error:') !== false) {
         return [];
     }
+
     $interfaces = [];
-    foreach (explode("\n", $output) as $line) {
-        list($name, $state) = explode('|', $line);
-        $interfaces[trim($name)] = trim($state);
+    $lines = explode("\n", $raw_output);
+    $current_iface_name = null;
+    $current_iface_data = ['oper_state' => 'UNKNOWN', 'rx_bytes' => 0, 'tx_bytes' => 0];
+
+    foreach ($lines as $line) {
+        $line = trim($line);
+
+        // Match interface start line: e.g., "1: lo: <LOOPBACK,UP,LOWER_UP>"
+        if (preg_match('/^\d+:\s+([a-zA-Z0-9_]+):.*$/', $line, $matches)) {
+            // If we have data for a previous interface, save it
+            if ($current_iface_name !== null) {
+                $interfaces[$current_iface_name] = $current_iface_data;
+            }
+            // Start new interface data
+            $current_iface_name = $matches[1];
+            $current_iface_data = ['oper_state' => 'UNKNOWN', 'rx_bytes' => 0, 'tx_bytes' => 0];
+
+            // Extract oper_state from this line too if present (e.g., 'state UP')
+            if (preg_match('/state\s+([A-Z_]+)/', $line, $state_matches)) {
+                $current_iface_data['oper_state'] = $state_matches[1];
+            }
+        } 
+        // Match RX bytes line: e.g., "RX: bytes packets errors dropped missed mcast"
+        elseif (str_starts_with($line, 'RX:')) {
+            if (preg_match('/RX:\s+bytes\s+(\d+)/', $line, $matches)) {
+                $current_iface_data['rx_bytes'] = (int)$matches[1];
+            }
+        }
+        // Match TX bytes line: e.g., "TX: bytes packets errors dropped carrier collsns"
+        elseif (str_starts_with($line, 'TX:')) {
+            if (preg_match('/TX:\s+bytes\s+(\d+)/', $line, $matches)) {
+                $current_iface_data['tx_bytes'] = (int)$matches[1];
+            }
+        }
     }
-    return $interfaces; // Returns associative array: [ 'eth0' => 'UP', 'wlan0' => 'DOWN' ]
+
+    // Save the last interface's data
+    if ($current_iface_name !== null) {
+        $interfaces[$current_iface_name] = $current_iface_data;
+    }
+
+    error_log(sprintf("[%s] DEBUG: Parsed interfaces data (from ip link show):\n%s", date('Y-m-d H:i:s'), json_encode($interfaces, JSON_PRETTY_PRINT))); // DEBUG LOG
+    return $interfaces;
 }
 
 function get_netplan_interfaces($yq_path, $config_file) {
-    $command = "sudo {$yq_path} '.network.ethernets | keys' " . escapeshellarg($config_file);
+    // --- REVISED YQ CALLING APPROACH FOR RELIABILITY ---
+    // Instead of piping directly into sudo yq, read file content, pass to yq via stdin
+    // This can sometimes bypass tty issues with sudo + piping.
+    $config_content = @file_get_contents($config_file); // @ suppresses warnings if file not readable by PHP directly
+    if ($config_content === false) {
+        error_log("Failed to read Netplan config file: {$config_file}");
+        return [];
+    }
+
+    $command = "echo " . escapeshellarg($config_content) . " | sudo {$yq_path} '.network.ethernets | keys' 2>&1"; // Changed: now pipes content to yq
     $output = secure_shell_exec_with_log($command, 'get_defined_interfaces');
+    
     if (empty($output) || strpos($output, 'Error:') !== false || strpos($output, 'sudo:') !== false) {
         error_log("yq command failed in get_defined_interfaces: " . $output);
         return [];
@@ -60,8 +114,15 @@ function get_netplan_interfaces($yq_path, $config_file) {
 }
 
 function get_bridge_interfaces($yq_path, $config_file, $bridge_name = 'br0') {
-    $command = "sudo {$yq_path} '.network.bridges[\"{$bridge_name}\"].interfaces[]' " . escapeshellarg($config_file);
+    // --- REVISED YQ CALLING APPROACH FOR RELIABILITY ---
+    $config_content = @file_get_contents($config_file);
+    if ($config_content === false) {
+        error_log("Failed to read Netplan config file for bridge interfaces: {$config_file}");
+        return [];
+    }
+    $command = "echo " . escapeshellarg($config_content) . " | sudo {$yq_path} '.network.bridges[\"{$bridge_name}\"].interfaces[]' 2>&1"; // Changed
     $output = secure_shell_exec_with_log($command, 'get_bridge_interfaces');
+    
     if (empty($output) || strpos($output, 'Error:') !== false || strpos($output, 'sudo:') !== false) {
         error_log("yq command failed in get_bridge_interfaces: " . $output);
         return [];
@@ -69,44 +130,45 @@ function get_bridge_interfaces($yq_path, $config_file, $bridge_name = 'br0') {
     return array_map('trim', explode("\n", $output));
 }
 
-// Add/Remove and Apply functions unchanged for now.
-// They are still needed if you decide to re-implement modification later.
+// Add/Remove and Apply functions (unchanged logic, but simplified yq calls for in-place edit)
 function add_interface_to_bridge($yq_path, $config_file, $interface, $bridge_name = 'br0') {
-    // ... (unchanged) ...
     $escaped_interface = escapeshellarg($interface);
     $escaped_config_file = escapeshellarg($config_file);
-    $set_ethernet_config = "sudo {$yq_path} '.network.ethernets.{$escaped_interface}.dhcp4 = false' -i {$escaped_config_file}";
+
+    // Using `yq -i` directly, which edits in-place. This usually works well with sudoers.
+    $set_ethernet_config = "sudo {$yq_path} '.network.ethernets.{$escaped_interface}.dhcp4 = false' -i {$escaped_config_file} 2>&1";
     $output = secure_shell_exec_with_log($set_ethernet_config, 'add_interface_ethernet_config');
-    if (strpos($output, 'Error:') !== false || strpos($output, 'sudo:') !== false) {
+    if (strpos($output, 'Error:') !== false || strpos($output, 'sudo:') !== false || !empty(trim($output))) {
         error_log("Error setting ethernet config with yq: " . $output);
         return false;
     }
-    $add_to_bridge_cmd = "sudo {$yq_path} '.network.bridges[\"{$bridge_name}\"].interfaces |= (. + [{$escaped_interface}] | unique)' -i {$escaped_config_file}";
+
+    $add_to_bridge_cmd = "sudo {$yq_path} '.network.bridges[\"{$bridge_name}\"].interfaces |= (. + [{$escaped_interface}] | unique)' -i {$escaped_config_file} 2>&1";
     $output = secure_shell_exec_with_log($add_to_bridge_cmd, 'add_interface_to_bridge');
-    return strpos($output, 'Error:') === false && strpos($output, 'sudo:') === false;
+    return strpos($output, 'Error:') === false && strpos($output, 'sudo:') === false && empty(trim($output));
 }
 
 function remove_interface_from_bridge($yq_path, $config_file, $interface, $bridge_name = 'br0') {
-    // ... (unchanged) ...
     $escaped_interface = escapeshellarg($interface);
     $escaped_config_file = escapeshellarg($config_file);
-    $remove_from_bridge_cmd = "sudo {$yq_path} 'del(.network.bridges[\"{$bridge_name}\"].interfaces[] | select(. == {$escaped_interface}))' -i {$escaped_config_file}";
+
+    $remove_from_bridge_cmd = "sudo {$yq_path} 'del(.network.bridges[\"{$bridge_name}\"].interfaces[] | select(. == {$escaped_interface}))' -i {$escaped_config_file} 2>&1";
     $output = secure_shell_exec_with_log($remove_from_bridge_cmd, 'remove_interface_from_bridge');
     
     include_once 'config.php';
     $wan_iface = $wan_interface ?? 'UNKNOWN_WAN';
 
     if ($interface !== 'br0' && $interface !== 'lo' && $interface !== $wan_iface) {
-        $remove_from_ethernets_cmd = "sudo {$yq_path} 'del(.network.ethernets[\"{$interface}\"])' -i {$escaped_config_file}";
+        $remove_from_ethernets_cmd = "sudo {$yq_path} 'del(.network.ethernets[\"{$interface}\"])' -i {$escaped_config_file} 2>&1";
         secure_shell_exec_with_log($remove_from_ethernets_cmd, 'remove_interface_from_ethernets');
     }
-    return strpos($output, 'Error:') === false && strpos($output, 'sudo:') === false;
+    return strpos($output, 'Error:') === false && strpos($output, 'sudo:') === false && empty(trim($output));
 }
 
 function apply_netplan($netplan_backup_file, $config_file, $netplan_cmd_path, $tee_cmd_path) {
-    // ... (unchanged) ...
     $escaped_config_file = escapeshellarg($config_file);
     $escaped_netplan_backup_file = escapeshellarg($netplan_backup_file);
+
     if (file_exists($config_file)) {
         $backup_success = copy($config_file, $netplan_backup_file);
         if (!$backup_success) {
@@ -141,42 +203,47 @@ function apply_netplan($netplan_backup_file, $config_file, $netplan_cmd_path, $t
 if (isset($_GET['action'])) {
     switch ($_GET['action']) {
         case 'get_interfaces':
-            $all_detected_interfaces_with_state = get_all_detected_interfaces_system($ip_cmd_path); // Get names and operational states
-            $configured_interfaces_netplan = get_netplan_interfaces($yq_path, $netplan_config_file); // From ethernets: section
-            $bridged_interfaces_names = get_bridge_interfaces($yq_path, $netplan_config_file); // From bridge: interfaces: section
+            $all_detected_interfaces_full_data = get_all_detected_interfaces_system($ip_cmd_path);
+            $configured_interfaces_netplan = get_netplan_interfaces($yq_path, $netplan_config_file); // This is failing based on logs
+            $bridged_interfaces_names = get_bridge_interfaces($yq_path, $netplan_config_file); // This is failing based on logs
 
             $interfaces_data = [];
             
             include_once 'config.php';
             $wan_iface = $wan_interface ?? 'UNKNOWN_WAN_FALLBACK';
 
-            // Iterate over all *detected* interfaces to build the comprehensive list
-            foreach ($all_detected_interfaces_with_state as $iface_name => $oper_state) {
+            foreach ($all_detected_interfaces_full_data as $iface_name => $traffic_data) {
+                $oper_state = $traffic_data['oper_state'];
+                $rx_bytes = $traffic_data['rx_bytes'];
+                $tx_bytes = $traffic_data['tx_bytes'];
+
                 $is_wan = ($iface_name === $wan_iface);
                 $is_bridged = in_array($iface_name, $bridged_interfaces_names);
-                $is_loopback_or_bridge = ($iface_name === 'lo' || $iface_name === 'br0');
+                $is_loopback_or_bridge_itself = ($iface_name === 'lo' || $iface_name === 'br0');
                 $is_configured_in_netplan = in_array($iface_name, $configured_interfaces_netplan);
 
-                $type = 'Unknown';
-                if ($is_loopback_or_bridge) {
-                    $type = 'System';
+                $type_label = 'Unknown';
+                if ($is_loopback_or_bridge_itself) {
+                    $type_label = 'System';
                 } elseif ($is_wan) {
-                    $type = 'WAN';
+                    $type_label = 'WAN';
                 } elseif ($is_bridged) {
-                    $type = 'LAN (Bridged)';
-                } elseif ($is_configured_in_netplan) { // If configured but not WAN/Bridged
-                    $type = 'LAN (Configured)'; // Potentially static IP or other standalone LAN
+                    $type_label = 'LAN (Bridged)';
+                } elseif ($is_configured_in_netplan) {
+                    $type_label = 'LAN (Configured)';
                 } else {
-                    $type = 'LAN (Unassigned)'; // Detected but not configured in Netplan
+                    $type_label = 'LAN (Unassigned)';
                 }
                 
                 $interfaces_data[] = [
                     'name' => $iface_name,
-                    'type' => $type, // Categorical type
-                    'oper_state' => $oper_state, // Raw UP/DOWN state
+                    'type_label' => $type_label,
+                    'oper_state' => strtoupper($oper_state),
+                    'rx_bytes' => $rx_bytes,
+                    'tx_bytes' => $tx_bytes,
                     'is_wan' => $is_wan,
                     'is_bridged' => $is_bridged,
-                    'is_system' => $is_loopback_or_bridge
+                    'is_system' => $is_loopback_or_bridge_itself
                 ];
             }
             
@@ -189,14 +256,13 @@ if (isset($_GET['action'])) {
 
         case 'set_interface_state':
             $interface = isset($_POST['interface']) ? trim($_POST['interface']) : '';
-            $state = isset($_POST['state']) ? trim($_POST['state']) : ''; // 'up' or 'down'
+            $state = isset($_POST['state']) ? trim($_POST['state']) : '';
 
             if (empty($interface) || !in_array($state, ['up', 'down'])) {
                 echo json_encode(['status' => 'error', 'message' => 'Invalid interface or state provided.']);
                 exit();
             }
 
-            // Security: Prevent disabling critical interfaces like WAN or br0 if it's the only one
             include_once 'config.php';
             $wan_iface = $wan_interface ?? 'UNKNOWN_WAN';
             if ($interface === $wan_iface && $state === 'down') {
@@ -215,17 +281,15 @@ if (isset($_GET['action'])) {
             $command = "sudo {$ip_cmd_path} link set " . escapeshellarg($interface) . " {$state} 2>&1";
             $output = secure_shell_exec_with_log($command, 'set_interface_state');
 
-            if (empty(trim($output))) { // Command successful if output is empty
+            if (empty(trim($output))) {
                 echo json_encode(['status' => 'success', 'message' => "Interface '{$interface}' set to '{$state}' successfully."]);
             } else {
                 echo json_encode(['status' => 'error', 'message' => "Failed to set interface '{$interface}' to '{$state}': " . htmlspecialchars($output)]);
             }
             break;
 
-        // Add/remove bridge actions remain, but not directly used by current settings.php UI
-        case 'add_to_bridge': // ... (unchanged) ...
-        case 'remove_from_bridge': // ... (unchanged) ...
-
+        case 'add_to_bridge':
+        case 'remove_from_bridge':
         default:
             echo json_encode(['status' => 'error', 'message' => 'Invalid action.']);
             break;
