@@ -107,7 +107,6 @@ detect_interfaces() {
     if [[ -z "$user_lan_input" ]]; then
         LAN_IFACE_NUMBERS=(${default_lan_choices_str[@]})
     else
-        # Use a temporary variable to hold choices for validation before assigning to LAN_IFACE_NUMBERS
         local temp_lan_iface_numbers
         if ! get_list_of_choices "" "$user_lan_input" "${#interfaces_array[@]}" "temp_lan_iface_numbers"; then
             echo "Invalid LAN interface selection. Exiting."
@@ -181,7 +180,7 @@ setup_login_credentials() {
         exit 1
     fi
 
-    # FIX: Ensure consistent SHA256 hashing with PHP's hash('sha256', ...)
+    # Ensure consistent SHA256 hashing with PHP's hash('sha256', ...)
     # Use printf to avoid issues with echo -n and ensure exact string input to openssl
     HASHED_PASSWORD=$(printf "%s" "$WEB_PASSWORD" | openssl dgst -sha256 | awk '{print $2}')
     
@@ -204,11 +203,20 @@ EOF
 install_dependencies() {
     echo "--- Installing required packages ---"
     sudo apt update
-    # Add ipcalc and dos2unix to the installation list
+    # Add ipcalc and dos2unix and wget/curl for yq to the installation list
     if [[ "$setup_wifi" == "y" ]]; then
-        sudo apt install -y net-tools dnsmasq hostapd wireless-tools iw ipset iptables-persistent apache2 php libapache2-mod-php jq dnsutils ipcalc dos2unix openssl bridge-utils
+        sudo apt install -y net-tools dnsmasq hostapd wireless-tools iw ipset iptables-persistent apache2 php libapache2-mod-php jq dnsutils ipcalc dos2unix openssl bridge-utils wget curl
     else
-        sudo apt install -y net-tools dnsmasq ipset iptables-persistent apache2 php libapache2-mod-php jq dnsutils ipcalc dos2unix openssl bridge-utils
+        sudo apt install -y net-tools dnsmasq ipset iptables-persistent apache2 php libapache2-mod-php jq dnsutils ipcalc dos2unix openssl bridge-utils wget curl
+    fi
+
+    # Install yq (Go version) if not already present
+    if ! command -v yq &>/dev/null; then
+        echo "Installing yq (Go version)..."
+        YQ_VERSION="v4.42.1" # Check for the latest version on GitHub: https://github.com/mikefarah/yq/releases
+        YQ_BINARY="yq_linux_amd64"
+        wget "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/${YQ_BINARY}" -O /usr/local/bin/yq || { echo "Failed to download yq. Check internet connection or YQ_VERSION/YQ_BINARY."; exit 1; }
+        sudo chmod +x /usr/local/bin/yq
     fi
 }
 
@@ -268,7 +276,7 @@ configure_system() {
 
     sudo systemctl disable systemd-resolved
     sudo systemctl stop systemd-resolved
-    sudo rm -f /etc/resolv.conf # Use -f for force removal without prompt
+    sudo rm -f /etc/resolv.conf
     echo "nameserver 127.0.0.1" | sudo tee /etc/resolv.conf > /dev/null
 }
 
@@ -297,21 +305,22 @@ generate_configs() {
     NETPLAN_CONFIG+="
   bridges:
     br0:
-      interfaces: [$(echo "$LAN_IFS_TO_BRIDGE" | sed 's/ /, /g')]
+      interfaces: [$(echo $LAN_IFS_TO_BRIDGE | sed 's/ /, /g')]
       dhcp4: no
       addresses: [$LAN_IP_CIDR]
       nameservers:
         addresses: [$LAN_IP, 8.8.8.8, 8.8.4.4]
 "
     echo "$NETPLAN_CONFIG" | sudo tee /etc/netplan/01-network-config.yaml > /dev/null
-    sudo chmod 600 /etc/netplan/01-network-config.yaml
+    sudo chmod 640 /etc/netplan/01-network-config.yaml # Set correct file permissions
+    sudo chown root:www-data /etc/netplan/01-network-config.yaml # Set correct file ownership
+    sudo chmod 775 /etc/netplan/ # Set correct directory permissions for backup to work
     sudo netplan apply
     
     sudo mv /etc/dnsmasq.conf /etc/dnsmasq.conf.bak 2>/dev/null
-    NETMASK=$(ipcalc -n "$LAN_IP_CIDR" 2>/dev/null | awk '/Netmask:/ {print $2}') # Added 2>/dev/null to suppress ipcalc warnings
+    NETMASK=$(ipcalc -n "$LAN_IP_CIDR" 2>/dev/null | awk '/Netmask:/ {print $2}')
     if [[ -z "$NETMASK" ]]; then
         echo "Warning: Could not determine netmask for $LAN_IP_CIDR. DHCP option 1 might be incorrect." >&2
-        # Attempt to derive netmask if ipcalc failed (simple /24 case)
         if [[ "$LAN_IP_CIDR" =~ /([0-9]+)$ ]]; then
             CIDR_BITS=${BASH_REMATCH[1]}
             if [[ "$CIDR_BITS" -eq 24 ]]; then
@@ -361,9 +370,8 @@ EOF
     fi
 
     echo "--- Creating update_hostapd.sh script ---"
-    # Ensure the scripts directory exists before tee-ing into it
     sudo mkdir -p ./scripts/
-    cat <<'EOF' | sudo tee ./scripts/update_hostapd.sh > /dev/null # This now creates it in scripts/
+    cat <<'EOF' | sudo tee ./scripts/update_hostapd.sh > /dev/null
 #!/bin/bash
 NEW_SSID="$1"
 NEW_PASS="$2"
@@ -389,8 +397,6 @@ if ! [ -f "$HOSTAPD_CONF" ]; then
     exit 1
 fi
 
-# Ensure that the password in hostapd.conf is correctly updated
-# Use a temporary file for sed operations to prevent corruption
 sudo sed -i.bak -E "s/^(ssid=).*/\1$NEW_SSID/" "$HOSTAPD_CONF" && \
 sudo sed -i.bak -E "s/^(wpa_passphrase=).*/\1$NEW_PASS/" "$HOSTAPD_CONF"
 
@@ -404,30 +410,28 @@ else
     exit 1
 fi
 EOF
-    sudo chmod +x ./scripts/update_hostapd.sh # Make it executable in scripts/
+    sudo chmod +x ./scripts/update_hostapd.sh
 
     echo "--- Correcting script line endings ---"
-    # It's safer to check if the files exist before running dos2unix on them
     if [ -f "./scripts/update_blocked_ips.sh" ]; then
         dos2unix ./scripts/update_blocked_ips.sh
     fi
     if [ -f "./scripts/update_net_stats.sh" ]; then
         dos2unix ./scripts/update_net_stats.sh
     fi
-    if [ -f "./scripts/update_hostapd.sh" ]; then # FIX: Add dos2unix for this script too
+    if [ -f "./scripts/update_hostapd.sh" ]; then
         dos2unix ./scripts/update_hostapd.sh
     fi
     
-    # Ensure target directory exists
     sudo mkdir -p /usr/local/bin/
 
     sudo cp ./scripts/update_blocked_ips.sh /usr/local/bin/
     sudo cp ./scripts/update_net_stats.sh /usr/local/bin/
-    sudo cp ./scripts/update_hostapd.sh /usr/local/bin/ # FIX: Copy to /usr/local/bin/
+    sudo cp ./scripts/update_hostapd.sh /usr/local/bin/
 
     sudo chmod +x /usr/local/bin/update_blocked_ips.sh
     sudo chmod +x /usr/local/bin/update_net_stats.sh
-    sudo chmod +x /usr/local/bin/update_hostapd.sh # Ensure it's executable in /usr/local/bin/
+    sudo chmod +x /usr/local/bin/update_hostapd.sh
 
     echo "--- Creating PHP config file ---"
     cat <<EOF | sudo tee /var/www/html/config.php > /dev/null
@@ -437,6 +441,47 @@ EOF
 \$wan_interface = '$WAN_IFACE';
 ?>
 EOF
+
+    echo "--- Creating check_device_status.php script ---"
+    cat <<'EOF' | sudo tee /var/www/html/check_device_status.php > /dev/null
+<?php
+session_start();
+header('Content-Type: application/json');
+
+if (!isset($_SESSION['logged_in']) || $_SESSION['logged_in'] !== true) {
+    http_response_code(401);
+    echo json_encode(['status' => 'error', 'message' => 'Unauthorized access']);
+    exit();
+}
+
+function secure_shell_exec_no_log($command) {
+    // This variant is for a rapid-fire check, avoids excessive logging for pings
+    $output = shell_exec($command . ' 2>&1');
+    return trim($output);
+}
+
+if (isset($_GET['ip'])) {
+    $ip = escapeshellarg($_GET['ip']);
+    $ping_command = "/bin/ping -c 1 -W 1 $ip"; // Use /bin/ping or /usr/bin/ping depending on your system
+    $ping_output = secure_shell_exec_no_log($ping_command);
+
+    if (strpos($ping_output, ' 0% packet loss') !== false) {
+        echo json_encode(['status' => 'online']);
+    } else {
+        if (strpos($ping_output, 'Operation not permitted') !== false || strpos($ping_output, 'unknown host') !== false || strpos($ping_output, 'ping: sendmsg: Operation not permitted') !== false) {
+             error_log("Ping command failed for IP $ip: $ping_output");
+             echo json_encode(['status' => 'error', 'message' => 'Ping command error: ' . $ping_output]);
+        } else {
+            echo json_encode(['status' => 'offline']);
+        }
+    }
+} else {
+    echo json_encode(['status' => 'error', 'message' => 'No IP provided']);
+}
+?>
+EOF
+    sudo chown www-data:www-data /var/www/html/check_device_status.php
+    sudo chmod 644 /var/www/html/check_device_status.php
 }
 
 setup_web_interface() {
@@ -444,39 +489,33 @@ setup_web_interface() {
     
     sudo rm -f /var/www/html/index.html
     
-    # Copy all web files from ./web/ to /var/www/html/
-    # Ensure ./web/ directory exists before copying
     if [ -d "./web/" ]; then
         sudo cp -r ./web/* /var/www/html/
     else
         echo "Warning: ./web/ directory not found. Web interface files not copied." >&2
     fi
     
-    # Ensure users.json exists with correct permissions
     sudo touch /var/www/html/users.json
     sudo chown www-data:www-data /var/www/html/users.json
     sudo chmod 660 /var/www/html/users.json
     
-    # The old credentials.php file is no longer used, so we can remove it.
-    sudo rm -f /var/www/html/credentials.php
+    sudo rm -f /var/www/html/credentials.php # This file is now obsolete
     
-    sudo touch /var/www/html/blocked_domains.txt # Ensure this file exists
+    sudo touch /var/www/html/blocked_domains.txt
     
-    # Set ownership and permissions for the entire web root
     sudo chown -R www-data:www-data /var/www/html
     sudo chmod -R 644 /var/www/html/
-    sudo find /var/www/html -type d -exec chmod 755 {} + # Directories should be executable
+    sudo find /var/www/html -type d -exec chmod 755 {} +
 
-    echo "Adding sudo rule for www-data to run scripts..."
-    # Ensure the sudoers.d directory exists
+    echo "Adding sudo rule for www-data to run scripts and network commands..."
     sudo mkdir -p /etc/sudoers.d/
-    echo "www-data ALL=(root) NOPASSWD: /usr/local/bin/update_blocked_ips.sh, /usr/sbin/ipset add no_internet_access *, /usr/sbin/ipset del no_internet_access *, /usr/sbin/ipset flush no_internet_access, /usr/local/bin/update_hostapd.sh, /usr/bin/systemctl restart hostapd" | sudo tee /etc/sudoers.d/www-data_firewall > /dev/null
+    # Corrected `tee` path and added `ip link set` permissions
+    echo "www-data ALL=(root) NOPASSWD: /usr/local/bin/update_blocked_ips.sh, /usr/sbin/ipset add no_internet_access *, /usr/sbin/ipset del no_internet_access *, /usr/sbin/ipset flush no_internet_access, /usr/local/bin/update_hostapd.sh, /usr/bin/systemctl restart hostapd, /bin/ping, /usr/sbin/netplan apply, /usr/local/bin/yq, /usr/sbin/ip link set * up, /usr/sbin/ip link set * down, /usr/bin/tee /etc/netplan/01-network-config.yaml" | sudo tee /etc/sudoers.d/www-data_firewall > /dev/null
     sudo chmod 0440 /etc/sudoers.d/www-data_firewall
     
     echo "Setting permissions for dnsmasq.leases file..."
-    # Ensure the parent directory exists and permissions are correct
     sudo mkdir -p /var/lib/misc/
-    sudo touch /var/lib/misc/dnsmasq.leases # Create if it doesn't exist
+    sudo touch /var/lib/misc/dnsmasq.leases
     sudo chown www-data:www-data /var/lib/misc/dnsmasq.leases
     sudo chmod 660 /var/lib/misc/dnsmasq.leases
 }
@@ -494,18 +533,27 @@ configure_services() {
     sudo systemctl restart dnsmasq
     sudo systemctl enable dnsmasq
     sudo systemctl restart apache2
-    # Ensure php-sessions is installed (though part of apt install, good to verify)
     if ! dpkg -s php-sessions &>/dev/null; then
         echo "php-sessions not found, attempting to install..."
         sudo apt install php-sessions -y
     fi
     
-    # Re-verify permissions for dnsmasq.leases
-    sudo chmod 644 /var/lib/misc/dnsmasq.leases # Set to 644 as per original, though 660 might be needed for www-data write. Let's stick to 660 from setup_web_interface
-    sudo chown www-data:www-data /var/lib/misc/dnsmasq.leases # Ensure ownership
-    sudo usermod -aG dnsmasq www-data # Add www-data to dnsmasq group
-    sudo chmod g+r /var/lib/misc/dnsmasq.leases # Ensure group read access
+    sudo chmod 660 /var/lib/misc/dnsmasq.leases
+    sudo chown www-data:www-data /var/lib/misc/dnsmasq.leases
+    sudo usermod -aG dnsmasq www-data
+    sudo chmod g+r /var/lib/misc/dnsmasq.leases
     
+    if command -v setcap &>/dev/null; then
+        PING_PATH=$(which ping)
+        if [ -n "$PING_PATH" ]; then
+            echo "Attempting to set CAP_NET_RAW capability for $PING_PATH..."
+            sudo setcap cap_net_raw+ep "$PING_PATH" || echo "Warning: Failed to set CAP_NET_RAW capability for $PING_PATH. Ping might still require sudo if not already configured." >&2
+        else
+            echo "Warning: 'ping' command not found, cannot set CAP_NET_RAW capability." >&2
+        fi
+    else
+        echo "Warning: 'setcap' command not found. Please install 'libcap2-bin' for proper ping permissions." >&2
+    fi
 }
 
 # --- 6. FIRST-RUN SCRIPT EXECUTION ---
@@ -513,7 +561,6 @@ run_first_time_scripts() {
     echo "--- Running custom scripts for the first time to ensure they work ---"
 
     echo "Executing update_blocked_ips.sh..."
-    # Check if the script exists before running
     if [ -f "/usr/local/bin/update_blocked_ips.sh" ]; then
         sudo /usr/local/bin/update_blocked_ips.sh
         if [ $? -ne 0 ]; then
@@ -545,9 +592,7 @@ main() {
         exit 1
     fi
     
-    # Check for required commands before proceeding, but they will be installed if missing.
-    # This check is primarily informative if someone runs it without sudo.
-    REQUIRED_COMMANDS=(ip awk tee sed openssl ipset iptables systemctl dos2unix ipcalc jq)
+    REQUIRED_COMMANDS=(ip awk tee sed openssl ipset iptables systemctl dos2unix ipcalc jq wget curl)
     MISSING_COMMANDS=()
     for cmd in "${REQUIRED_COMMANDS[@]}"; do
         if ! command -v "$cmd" &>/dev/null; then
@@ -563,8 +608,8 @@ main() {
     install_dependencies
     configure_system
     generate_configs
-    setup_web_interface # Copy web files, set permissions for /var/www/html including users.json
-    setup_login_credentials # <--- MOVED TO HERE: Create initial user after web setup and permissions
+    setup_web_interface
+    setup_login_credentials # Create initial user AFTER web setup and permissions are in place
     configure_services
     run_first_time_scripts
 
