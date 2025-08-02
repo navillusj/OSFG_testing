@@ -155,7 +155,7 @@ if (!isset($wan_interface)) {
         <div class="grid">
         <?php
         $leasesFile = '/var/lib/misc/dnsmasq.leases';
-        $leases_data_for_js = []; // Array to pass to JavaScript
+        $leases_data_for_js = [];
         if (file_exists($leasesFile)) {
             $leases = file($leasesFile, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
             if ($leases !== false && !empty($leases)) {
@@ -171,7 +171,7 @@ if (!isset($wan_interface)) {
                             'ip' => $ip,
                             'mac' => $mac,
                             'hostname' => $hostname,
-                            'expiry' => $timestamp // Unix timestamp
+                            'expiry' => $timestamp
                         ];
             ?>
             <div class="card dhcp-card" data-ip="<?php echo htmlspecialchars($ip); ?>" data-expiry="<?php echo htmlspecialchars($timestamp); ?>">
@@ -198,10 +198,8 @@ if (!isset($wan_interface)) {
     </footer>
 
     <script>
-        // Pass PHP lease data to JavaScript
         const dhcpLeases = <?php echo json_encode($leases_data_for_js); ?>;
 
-        // Function to format time remaining
         function formatTimeRemaining(seconds) {
             if (seconds <= 0) {
                 return "Expired";
@@ -215,23 +213,22 @@ if (!isset($wan_interface)) {
             if (d > 0) parts.push(d + "d");
             if (h > 0) parts.push(h + "h");
             if (m > 0) parts.push(m + "m");
-            if (s > 0 || parts.length === 0) parts.push(s + "s"); // Show seconds if nothing else, or if it's the only unit left
+            if (s > 0 || parts.length === 0) parts.push(s + "s");
             
             return parts.join(" ");
         }
 
-        // Function to update countdowns
         function updateCountdowns() {
             const countdownElements = document.querySelectorAll('.lease-countdown');
             countdownElements.forEach(el => {
-                const expiryTimestamp = parseInt(el.dataset.timestamp) * 1000; // Convert to milliseconds
+                const expiryTimestamp = parseInt(el.dataset.timestamp) * 1000;
                 const now = new Date().getTime();
-                const timeLeft = expiryTimestamp - now; // Time left in milliseconds
+                const timeLeft = expiryTimestamp - now;
 
                 if (timeLeft <= 0) {
                     el.textContent = "Expired";
-                    el.closest('.dhcp-card').classList.add('status-expired'); // Add class for expired devices
-                    el.closest('.dhcp-card').classList.remove('status-online', 'status-offline'); // Remove other status classes
+                    el.closest('.dhcp-card').classList.add('status-expired');
+                    el.closest('.dhcp-card').classList.remove('status-online', 'status-offline');
                 } else {
                     const secondsRemaining = Math.floor(timeLeft / 1000);
                     el.textContent = formatTimeRemaining(secondsRemaining);
@@ -239,19 +236,17 @@ if (!isset($wan_interface)) {
             });
         }
 
-        // Function to check device status via AJAX
         async function checkDeviceStatus(ip, cardElement) {
             const statusSpan = cardElement.querySelector('.device-status');
             const currentStatusClass = cardElement.querySelector('.device-status').closest('p').querySelector('span').classList;
 
-            // Don't ping if lease is expired
             if (cardElement.classList.contains('status-expired')) {
                 statusSpan.textContent = 'Lease Expired';
                 return;
             }
 
             statusSpan.textContent = 'Checking...';
-            currentStatusClass.remove('status-online', 'status-offline'); // Clear previous status
+            currentStatusClass.remove('status-online', 'status-offline');
 
             try {
                 const response = await fetch(`check_device_status.php?ip=${ip}`);
@@ -262,47 +257,42 @@ if (!isset($wan_interface)) {
                     currentStatusClass.add('status-online');
                     cardElement.classList.remove('status-offline');
                     cardElement.classList.add('status-online');
-                    cardElement.style.borderLeftColor = '#50c878'; // Green for online
+                    cardElement.style.borderLeftColor = '#50c878';
                 } else {
                     statusSpan.textContent = 'Offline';
                     currentStatusClass.add('status-offline');
                     cardElement.classList.remove('status-online');
                     cardElement.classList.add('status-offline');
-                    cardElement.style.borderLeftColor = '#d9363e'; // Red for offline
+                    cardElement.style.borderLeftColor = '#d9363e';
                 }
             } catch (error) {
                 console.error('Error checking device status:', error);
                 statusSpan.textContent = 'Error';
-                currentStatusClass.add('status-offline'); // Assume offline on error
+                currentStatusClass.add('status-offline');
                 cardElement.classList.remove('status-online');
                 cardElement.classList.add('status-offline');
-                cardElement.style.borderLeftColor = '#d9363e'; // Red for error/offline
+                cardElement.style.borderLeftColor = '#d9363e';
             }
         }
 
-        // Initial update and set intervals
         document.addEventListener('DOMContentLoaded', () => {
-            updateCountdowns(); // Initial countdown update
+            updateCountdowns();
 
-            // Get all DHCP lease cards
             const dhcpCards = document.querySelectorAll('.dhcp-card');
 
-            // Ping all devices initially
             dhcpCards.forEach(card => {
                 const ip = card.dataset.ip;
                 checkDeviceStatus(ip, card);
             });
 
-            // Update countdowns every second
             setInterval(updateCountdowns, 1000);
 
-            // Re-ping devices every 30 seconds
             setInterval(() => {
                 dhcpCards.forEach(card => {
                     const ip = card.dataset.ip;
                     checkDeviceStatus(ip, card);
                 });
-            }, 30000); // 30 seconds
+            }, 30000);
         });
     </script>
 </body>
