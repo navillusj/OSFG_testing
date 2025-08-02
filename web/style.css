@@ -419,27 +419,3 @@ input:checked + .slider:before {
 .interfaces-table tbody tr:hover {
     background-color: #333;
 }
-
-/* New styles for device status cards */
-.dhcp-card.status-online {
-    border-left-color: #50c878; /* Green for online */
-}
-
-.dhcp-card.status-offline {
-    border-left-color: #d9363e; /* Red for offline */
-}
-
-.dhcp-card.status-expired {
-    border-left-color: #888; /* Grey for expired lease */
-    opacity: 0.7; /* Slightly faded */
-}
-
-.device-status.status-online {
-    color: #50c878;
-    font-weight: bold;
-}
-
-.device-status.status-offline {
-    color: #d9363e;
-    font-weight: bold;
-}
