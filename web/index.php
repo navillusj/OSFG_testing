@@ -155,21 +155,31 @@ if (!isset($wan_interface)) {
         <div class="grid">
         <?php
         $leasesFile = '/var/lib/misc/dnsmasq.leases';
+        $leases_data_for_js = []; // Array to pass to JavaScript
         if (file_exists($leasesFile)) {
             $leases = file($leasesFile, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
             if ($leases !== false && !empty($leases)) {
                 foreach ($leases as $lease) {
                     $parts = explode(' ', trim($lease));
                     if (count($parts) >= 4) {
-                        list($timestamp, $mac, $ip, $hostname) = $parts;
-                        $date = is_numeric($timestamp) ? date('Y-m-d H:i:s', $timestamp) : 'N/A';
-                        $hostnameDisplay = ($hostname !== '*') ? $hostname : 'Unknown Host';
+                        $timestamp = (int)$parts[0];
+                        $mac = strtoupper($parts[1]);
+                        $ip = $parts[2];
+                        $hostname = ($parts[3] !== '*') ? $parts[3] : 'Unknown Host';
+                        
+                        $leases_data_for_js[] = [
+                            'ip' => $ip,
+                            'mac' => $mac,
+                            'hostname' => $hostname,
+                            'expiry' => $timestamp // Unix timestamp
+                        ];
             ?>
-            <div class="card dhcp-card">
-                <h3><i class="fas fa-network-wired"></i> <?php echo htmlspecialchars($hostnameDisplay); ?></h4>
+            <div class="card dhcp-card" data-ip="<?php echo htmlspecialchars($ip); ?>" data-expiry="<?php echo htmlspecialchars($timestamp); ?>">
+                <h3><i class="fas fa-network-wired"></i> <span class="hostname"><?php echo htmlspecialchars($hostname); ?></span></h3>
                 <p><strong>IP Address:</strong> <?php echo htmlspecialchars($ip); ?></p>
-                <p><strong>MAC Address:</strong> <?php echo htmlspecialchars(strtoupper($mac)); ?></p>
-                <p><strong>Lease Expires:</strong> <?php echo htmlspecialchars($date); ?></p>
+                <p><strong>MAC Address:</strong> <?php echo htmlspecialchars($mac); ?></p>
+                <p><strong>Lease Expires:</strong> <span class="lease-countdown" data-timestamp="<?php echo htmlspecialchars($timestamp); ?>">Calculating...</span></p>
+                <p><strong>Status:</strong> <span class="device-status">Checking...</span></p>
             </div>
             <?php
                     }
@@ -184,7 +194,116 @@ if (!isset($wan_interface)) {
         </div>
     </div>
     <footer>
-        <p>&copy; <?php echo date("Y"); ?> Ubuntu Router Monitor | Last Updated: <?php echo date("Y-m-d H:i:s AEST"); ?></p>
+        <p>&copy; <?php echo date("Y"); ?> Ubuntu Router Monitor | Last Updated: <?php date_default_timezone_set('Australia/Perth'); echo date("Y-m-d H:i:s A"); ?></p>
     </footer>
+
+    <script>
+        // Pass PHP lease data to JavaScript
+        const dhcpLeases = <?php echo json_encode($leases_data_for_js); ?>;
+
+        // Function to format time remaining
+        function formatTimeRemaining(seconds) {
+            if (seconds <= 0) {
+                return "Expired";
+            }
+            const d = Math.floor(seconds / (3600 * 24));
+            const h = Math.floor((seconds % (3600 * 24)) / 3600);
+            const m = Math.floor((seconds % 3600) / 60);
+            const s = Math.floor(seconds % 60);
+
+            let parts = [];
+            if (d > 0) parts.push(d + "d");
+            if (h > 0) parts.push(h + "h");
+            if (m > 0) parts.push(m + "m");
+            if (s > 0 || parts.length === 0) parts.push(s + "s"); // Show seconds if nothing else, or if it's the only unit left
+            
+            return parts.join(" ");
+        }
+
+        // Function to update countdowns
+        function updateCountdowns() {
+            const countdownElements = document.querySelectorAll('.lease-countdown');
+            countdownElements.forEach(el => {
+                const expiryTimestamp = parseInt(el.dataset.timestamp) * 1000; // Convert to milliseconds
+                const now = new Date().getTime();
+                const timeLeft = expiryTimestamp - now; // Time left in milliseconds
+
+                if (timeLeft <= 0) {
+                    el.textContent = "Expired";
+                    el.closest('.dhcp-card').classList.add('status-expired'); // Add class for expired devices
+                    el.closest('.dhcp-card').classList.remove('status-online', 'status-offline'); // Remove other status classes
+                } else {
+                    const secondsRemaining = Math.floor(timeLeft / 1000);
+                    el.textContent = formatTimeRemaining(secondsRemaining);
+                }
+            });
+        }
+
+        // Function to check device status via AJAX
+        async function checkDeviceStatus(ip, cardElement) {
+            const statusSpan = cardElement.querySelector('.device-status');
+            const currentStatusClass = cardElement.querySelector('.device-status').closest('p').querySelector('span').classList;
+
+            // Don't ping if lease is expired
+            if (cardElement.classList.contains('status-expired')) {
+                statusSpan.textContent = 'Lease Expired';
+                return;
+            }
+
+            statusSpan.textContent = 'Checking...';
+            currentStatusClass.remove('status-online', 'status-offline'); // Clear previous status
+
+            try {
+                const response = await fetch(`check_device_status.php?ip=${ip}`);
+                const data = await response.json();
+
+                if (data.status === 'online') {
+                    statusSpan.textContent = 'Online';
+                    currentStatusClass.add('status-online');
+                    cardElement.classList.remove('status-offline');
+                    cardElement.classList.add('status-online');
+                    cardElement.style.borderLeftColor = '#50c878'; // Green for online
+                } else {
+                    statusSpan.textContent = 'Offline';
+                    currentStatusClass.add('status-offline');
+                    cardElement.classList.remove('status-online');
+                    cardElement.classList.add('status-offline');
+                    cardElement.style.borderLeftColor = '#d9363e'; // Red for offline
+                }
+            } catch (error) {
+                console.error('Error checking device status:', error);
+                statusSpan.textContent = 'Error';
+                currentStatusClass.add('status-offline'); // Assume offline on error
+                cardElement.classList.remove('status-online');
+                cardElement.classList.add('status-offline');
+                cardElement.style.borderLeftColor = '#d9363e'; // Red for error/offline
+            }
+        }
+
+        // Initial update and set intervals
+        document.addEventListener('DOMContentLoaded', () => {
+            updateCountdowns(); // Initial countdown update
+
+            // Get all DHCP lease cards
+            const dhcpCards = document.querySelectorAll('.dhcp-card');
+
+            // Ping all devices initially
+            dhcpCards.forEach(card => {
+                const ip = card.dataset.ip;
+                checkDeviceStatus(ip, card);
+            });
+
+            // Update countdowns every second
+            setInterval(updateCountdowns, 1000);
+
+            // Re-ping devices every 30 seconds
+            setInterval(() => {
+                dhcpCards.forEach(card => {
+                    const ip = card.dataset.ip;
+                    checkDeviceStatus(ip, card);
+                });
+            }, 30000); // 30 seconds
+        });
+    </script>
 </body>
 </html>
