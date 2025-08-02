@@ -65,6 +65,55 @@ if (file_exists($hostapd_conf_path)) {
   <link rel="stylesheet" href="style.css"/>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css"/>
   <style>
+    /* Additions for toggle switch */
+    .switch {
+        position: relative;
+        display: inline-block;
+        width: 40px; /* Smaller switch */
+        height: 24px;
+    }
+    .switch input {
+        opacity: 0;
+        width: 0;
+        height: 0;
+    }
+    .slider {
+        position: absolute;
+        cursor: pointer;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background-color: #d9363e; /* Red for off/down */
+        transition: .4s;
+        border-radius: 24px; /* Half of height for rounded corners */
+    }
+    .slider:before {
+        position: absolute;
+        content: "";
+        height: 16px; /* Smaller circle */
+        width: 16px;
+        left: 4px;
+        bottom: 4px;
+        background-color: white;
+        transition: .4s;
+        border-radius: 50%;
+    }
+    input:checked + .slider {
+        background-color: #50c878; /* Green for on/up */
+    }
+    input:checked + .slider:before {
+        transform: translateX(16px); /* Move 16px (width) for 40px switch */
+    }
+    .status-text {
+        font-weight: bold;
+        margin-left: 8px; /* Space between toggle and text */
+        vertical-align: middle;
+    }
+    .status-up { color: #50c878; }
+    .status-down { color: #d9363e; }
+    /* End toggle switch additions */
+
     body { background: #0f1118; font-family: system-ui,-apple-system,BlinkMacSystemFont,sans-serif; color: #e5e9f0; margin: 0; padding: 0; }
     .container { max-width: 1000px; margin: 0 auto; padding: 24px; }
     .button { padding: 8px 14px; text-decoration: none; background: #2563eb; color: #fff; border-radius: 6px; margin-right: 8px; display: inline-block; font-size: 0.9rem; }
@@ -117,25 +166,33 @@ if (file_exists($hostapd_conf_path)) {
     </div>
 
     <div class="note">
-      <p><strong>Note:</strong> To modify which interfaces are part of the bridge, edit the Netplan YAML (e.g., <code>/etc/netplan/01-netcfg.yaml</code>) and run <code>sudo netplan apply</code> via SSH.</p>
+      <p><strong>Note:</strong> To modify which interfaces are part of the bridge, edit the Netplan YAML (e.g., <code>/etc/netplan/01-network-config.yaml</code>) and run <code>sudo netplan apply</code> via SSH.</p>
     </div>
 
     <h2>Network Interface Overview</h2>
     <div class="card">
       <div id="interface_overview_message" class="message" style="display:none;"></div>
       <div id="interface_overview_error" class="error" style="display:none;"></div>
+      
+      <div style="margin-bottom: 15px;">
+        <button id="refresh_now_btn" class="button"><i class="fas fa-sync-alt"></i> Refresh Now</button>
+        <button id="toggle_auto_refresh_btn" class="button"><i class="fas fa-pause"></i> Pause Auto-Refresh</button>
+        <span id="refresh_status" style="margin-left: 10px; color: #aaa;">Auto-refresh: Active (30s)</span>
+      </div>
 
       <table class="interfaces-table">
         <thead>
           <tr>
             <th>Interface Name</th>
             <th>Type</th>
-            <th>Status</th>
+            <th>Operational State</th>
+            <th>Traffic Status</th>
+            <th>Action</th>
           </tr>
         </thead>
         <tbody id="interfaces_table_body">
           <tr>
-            <td colspan="3" style="text-align: center; color: #888;">Loading interfaces...</td>
+            <td colspan="5" style="text-align: center; color: #888;">Loading interfaces...</td>
           </tr>
         </tbody>
       </table>
@@ -143,13 +200,22 @@ if (file_exists($hostapd_conf_path)) {
   </div>
 
   <script>
+    let trafficSnapshots = {}; // Stores { ifaceName: { rx: bytes, tx: bytes, timestamp: ms } } for comparison
+    let autoRefreshInterval = null;
+    const REFRESH_INTERVAL_SECS = 30;
+    const TRAFFIC_SAMPLING_DELAY_MS = 1500; // Delay between initial and second fetch for traffic
+
     document.addEventListener('DOMContentLoaded', async () => {
       const interfacesTableBody = document.getElementById('interfaces_table_body');
       const interfaceOverviewMessage = document.getElementById('interface_overview_message');
       const interfaceOverviewError = document.getElementById('interface_overview_error');
+      const refreshNowBtn = document.getElementById('refresh_now_btn');
+      const toggleAutoRefreshBtn = document.getElementById('toggle_auto_refresh_btn');
+      const refreshStatusSpan = document.getElementById('refresh_status');
 
-      function showFeedback(element, text) {
+      function showFeedback(element, text, type) {
         element.textContent = text;
+        element.className = type;
         element.style.display = 'block';
       }
       function hideFeedbacks() {
@@ -157,59 +223,38 @@ if (file_exists($hostapd_conf_path)) {
         interfaceOverviewError.style.display = 'none';
       }
 
-      // Restore normalizeInterfaces function
-      function normalizeInterfaces(orig) {
-        const results = [];
+      function normalizeInterfaces(dataInterfaces) {
+          if (!Array.isArray(dataInterfaces)) {
+              const names = String(dataInterfaces || '').trim().split(/\s+/).filter(n => n.length > 0);
+              return names.map(name => ({
+                  name: name,
+                  type_label: 'Unknown',
+                  oper_state: 'UNKNOWN',
+                  rx_bytes: 0,
+                  tx_bytes: 0,
+                  is_wan: false,
+                  is_bridged: false,
+                  is_system: false
+              }));
+          }
 
-        function splitNames(nameStr) {
-          return nameStr
-            .replace(/\r/g, ' ')
-            .replace(/\n/g, ' ')
-            .trim()
-            .split(/\s+/)
-            .filter(n => n.length > 0);
-        }
-
-        if (Array.isArray(orig)) {
-          orig.forEach(item => {
-            if (typeof item === 'string') {
-              splitNames(item).forEach(n => results.push({ name: n }));
-            } else if (item && typeof item === 'object') {
-              // Ensure boolean values for flags, and handle potential concatenated names
-              const base = {
-                is_wan: !!item.is_wan,
-                is_bridged: !!item.is_bridged,
-                is_system: !!item.is_system,
-                label: item.label || item.name || '' // Ensure label exists
-              };
-              if (typeof item.name === 'string' && (item.name.includes('\n') || /\s+/.test(item.name.trim()))) {
-                splitNames(item.name).forEach(n => {
-                  results.push({ ...base, name: n, label: n + (base.label.includes('WAN') ? ' (WAN)' : '') + (base.label.includes('Bridged') ? ' (Bridged)' : '') + (base.label.includes('System') ? ' (System)' : '') });
-                });
-              } else if (typeof item.name === 'string') {
-                results.push({ ...base, name: item.name });
-              } else {
-                // Fallback for non-string names
-                results.push({ ...base, name: String(item.name) });
-              }
-            } else {
-              results.push({ name: String(item) });
-            }
-          });
-          return results;
-        }
-
-        if (typeof orig === 'string') {
-          splitNames(orig).forEach(n => results.push({ name: n }));
-          return results;
-        }
-
-        return [];
+          return dataInterfaces.map(iface => ({
+              name: iface.name || '—',
+              type_label: iface.type_label || 'Unknown',
+              oper_state: (typeof iface.oper_state === 'string' ? iface.oper_state.toUpperCase() : 'UNKNOWN'), 
+              rx_bytes: parseInt(iface.rx_bytes) || 0,
+              tx_bytes: parseInt(iface.tx_bytes) || 0,
+              is_wan: !!iface.is_wan,
+              is_bridged: !!iface.is_bridged,
+              is_system: !!iface.is_system
+          }));
       }
 
-      async function fetchAndPopulateInterfaces() {
-        hideFeedbacks();
-        interfacesTableBody.innerHTML = '<tr><td colspan="3" style="text-align: center; color: #888;">Loading interfaces...</td></tr>';
+      async function fetchAndPopulateInterfaces(fetchPhase = 1) { // Phase 1: initial data; Phase 2: traffic comparison
+        if (fetchPhase === 1) {
+            hideFeedbacks();
+            interfacesTableBody.innerHTML = '<tr><td colspan="5" style="text-align: center; color: #888;">Loading interfaces...</td></tr>';
+        }
 
         try {
           const response = await fetch('update_netplan.php?action=get_interfaces');
@@ -219,63 +264,167 @@ if (file_exists($hostapd_conf_path)) {
           const data = await response.json();
 
           if (data.status === 'success') {
-            const interfaces = normalizeInterfaces(data.interfaces); // Apply normalization here
+            const currentInterfaces = normalizeInterfaces(data.interfaces);
+            const now = new Date().getTime();
+
+            if (fetchPhase === 1) {
+                // Store first snapshot for traffic comparison
+                trafficSnapshots = {};
+                currentInterfaces.forEach(iface => {
+                    trafficSnapshots[iface.name] = { rx: iface.rx_bytes, tx: iface.tx_bytes, timestamp: now };
+                });
+                // Schedule the second fetch for traffic comparison
+                setTimeout(() => fetchAndPopulateInterfaces(2), TRAFFIC_SAMPLING_DELAY_MS);
+                return; // Exit this phase 1 call
+            }
+
+            // --- Phase 2: Populate table with calculated traffic status ---
             interfacesTableBody.innerHTML = ''; // Clear loading message
 
-            if (!Array.isArray(interfaces) || interfaces.length === 0) {
-              interfacesTableBody.innerHTML = '<tr><td colspan="3" style="text-align: center; color: #888;">No network interfaces detected.</td></tr>';
+            if (currentInterfaces.length === 0) {
+              interfacesTableBody.innerHTML = '<tr><td colspan="5" style="text-align: center; color: #888;">No network interfaces detected.</td></tr>';
             } else {
-              interfaces.forEach(iface => {
-                const row = document.createElement('tr'); // Create new row for each interface
+              currentInterfaces.forEach(iface => {
+                const row = document.createElement('tr');
 
                 const nameCell = document.createElement('td');
                 const typeCell = document.createElement('td');
-                const statusCell = document.createElement('td');
+                const operStateCell = document.createElement('td');
+                const trafficStatusCell = document.createElement('td');
+                const actionCell = document.createElement('td');
                 
-                // Determine typeText and statusText based on normalized data
-                let typeText = 'Unknown';
-                let statusText = 'N/A';
+                // Determine Operational State (direct from kernel 'oper_state')
+                const isOperUp = iface.oper_state === 'UP'; // Strict check for 'UP'
+                const operStateText = isOperUp ? 'Active' : iface.oper_state; // Display actual state if not UP
+                const operStateClass = isOperUp ? 'status-up' : 'status-down';
 
-                if (iface.is_system) {
-                    typeText = 'System (Loopback/Bridge)';
-                    statusText = 'Active';
-                } else if (iface.is_wan) {
-                    typeText = 'WAN (Internet)';
-                    statusText = 'Active';
-                } else if (iface.is_bridged) {
-                    typeText = 'LAN (Bridged)';
-                    statusText = 'Active';
-                } else {
-                    typeText = 'LAN (Unassigned)';
-                    statusText = 'Inactive';
+                // Determine Traffic Status based on byte changes
+                let isTrafficActive = false;
+                const prevTraffic = trafficSnapshots[iface.name];
+                if (prevTraffic) {
+                    const rxChange = iface.rx_bytes - prevTraffic.rx;
+                    const txChange = iface.tx_bytes - prevTraffic.tx;
+                    // Consider active if any byte change. A small positive threshold (e.g., 100 bytes) can filter noise.
+                    const TRAFFIC_THRESHOLD_BYTES = 100; // Small threshold to count as "traffic"
+                    if (rxChange > TRAFFIC_THRESHOLD_BYTES || txChange > TRAFFIC_THRESHOLD_BYTES) {
+                        isTrafficActive = true;
+                    }
                 }
+                const trafficStatusText = isTrafficActive ? 'Transmitting' : 'No Traffic';
+                const trafficStatusClass = isTrafficActive ? 'status-up' : 'status-down';
 
-                // Populate cells
-                nameCell.innerHTML = `<i class="fas fa-network-wired" style="margin-right:8px;"></i> ${iface.name || '—'}`;
-                typeCell.textContent = typeText;
-                statusCell.textContent = statusText;
+                nameCell.innerHTML = `<i class="fas fa-network-wired" style="margin-right:8px;"></i> ${iface.name}`;
+                typeCell.textContent = iface.type_label;
+                operStateCell.innerHTML = `<span class="${operStateClass}">${operStateText}</span>`;
+                trafficStatusCell.innerHTML = `<span class="${trafficStatusClass}">${trafficStatusText}</span>`;
 
-                // Append cells to the row
+                // Create toggle switch
+                const isCriticalInterface = iface.is_wan || iface.is_system;
+                const toggleChecked = isOperUp ? 'checked' : ''; // Toggle state based on oper_state
+                const toggleDisabled = isCriticalInterface ? 'disabled' : '';
+
+                actionCell.innerHTML = `
+                    <label class="switch">
+                        <input type="checkbox" data-interface="${iface.name}" ${toggleChecked} ${toggleDisabled}>
+                        <span class="slider round"></span>
+                    </label>
+                `;
+                
                 row.appendChild(nameCell);
                 row.appendChild(typeCell);
-                row.appendChild(statusCell);
+                row.appendChild(operStateCell);
+                row.appendChild(trafficStatusCell);
+                row.appendChild(actionCell);
                 
-                // Append the row to the table body
                 interfacesTableBody.appendChild(row);
               });
+              
+              // Add event listeners for toggles (only once after table is built)
+              // Ensure we don't re-add listeners on every refresh to prevent duplicates
+              if (!interfacesTableBody.dataset.listenersAdded) {
+                document.querySelectorAll('.interfaces-table input[type="checkbox"]').forEach(toggle => {
+                  toggle.addEventListener('change', async (event) => {
+                    const interfaceName = event.target.dataset.interface;
+                    const newState = event.target.checked ? 'up' : 'down';
+
+                    if (!confirm(`Are you sure you want to set interface '${interfaceName}' to '${newState.toUpperCase()}'? This may disrupt network connectivity.`)) {
+                        event.target.checked = !event.target.checked;
+                        return;
+                    }
+
+                    try {
+                      showFeedback(interfaceOverviewMessage, `Setting ${interfaceName} to ${newState.toUpperCase()}...`, 'message');
+                      hideFeedbacks();
+
+                      const response = await fetch('update_netplan.php?action=set_interface_state', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                        body: `interface=${encodeURIComponent(interfaceName)}&state=${encodeURIComponent(newState)}`
+                      });
+                      const data = await response.json();
+
+                      if (data.status === 'success') {
+                        showFeedback(interfaceOverviewMessage, data.message, 'message');
+                        // After state change, force a full refresh (Phase 1) to re-evaluate activity
+                        await fetchAndPopulateInterfaces(1); 
+                      } else {
+                        showFeedback(interfaceOverviewError, data.message, 'error');
+                        event.target.checked = !event.target.checked;
+                      }
+                    } catch (error) {
+                      console.error('Error setting interface state:', error);
+                      showFeedback(interfaceOverviewError, 'Network error or server unavailable when setting interface state.', 'error');
+                      event.target.checked = !event.target.checked;
+                    }
+                  });
+                });
+                interfacesTableBody.dataset.listenersAdded = 'true'; // Mark listeners as added
+              }
             }
           } else {
-            showFeedback(interfaceOverviewError, `Failed to load interfaces: ${data.message || 'unknown error'}`);
-            interfacesTableBody.innerHTML = `<tr><td colspan="3" style="text-align: center; color: #d9363e;">Error: ${data.message || 'unknown'}</td></tr>`;
+            showFeedback(interfaceOverviewError, `Failed to load interfaces: ${data.message || 'unknown error'}`, 'error');
+            interfacesTableBody.innerHTML = `<tr><td colspan="5" style="text-align: center; color: #d9363e;">Error: ${data.message || 'unknown'}</td></tr>`;
           }
         } catch (err) {
           console.error('Network error fetching interfaces:', err);
-          showFeedback(interfaceOverviewError, 'Network error or server unavailable when fetching interfaces.');
-          interfacesTableBody.innerHTML = '<tr><td colspan="3" style="text-align: center; color: #d9363e;">Network Error</td></tr>';
+          showFeedback(interfaceOverviewError, 'Network error or server unavailable when fetching interfaces.', 'error');
+          interfacesTableBody.innerHTML = '<tr><td colspan="5" style="text-align: center; color: #d9363e;">Network Error</td></tr>';
         }
       }
 
-      fetchAndPopulateInterfaces();
+      // --- Auto-refresh controls ---
+      function startAutoRefresh() {
+          if (autoRefreshInterval) clearInterval(autoRefreshInterval);
+          autoRefreshInterval = setInterval(() => fetchAndPopulateInterfaces(1), REFRESH_INTERVAL_SECS * 1000); // Always start with Phase 1
+          toggleAutoRefreshBtn.innerHTML = '<i class="fas fa-pause"></i> Pause Auto-Refresh';
+          refreshStatusSpan.textContent = `Auto-refresh: Active (${REFRESH_INTERVAL_SECS}s)`;
+          toggleAutoRefreshBtn.classList.remove('paused');
+      }
+
+      function stopAutoRefresh() {
+          if (autoRefreshInterval) clearInterval(autoRefreshInterval);
+          autoRefreshInterval = null;
+          toggleAutoRefreshBtn.innerHTML = '<i class="fas fa-play"></i> Resume Auto-Refresh';
+          refreshStatusSpan.textContent = 'Auto-refresh: Paused';
+          toggleAutoRefreshBtn.classList.add('paused');
+      }
+
+      refreshNowBtn.addEventListener('click', () => {
+          stopAutoRefresh(); // Pause auto-refresh on manual trigger
+          fetchAndPopulateInterfaces(1); // Trigger immediate refresh (Phase 1)
+          // Resume auto-refresh after a short delay to allow manual refresh cycle to complete
+          setTimeout(startAutoRefresh, 5000); // Resume after 5 seconds
+      });
+
+      toggleAutoRefreshBtn.addEventListener('click', () => {
+          if (autoRefreshInterval) {
+              stopAutoRefresh();
+          } else {
+              startAutoRefresh();
+          }
+      });
+
+      startAutoRefresh(); // Start auto-refresh on page load
     });
   </script>
 </body>
