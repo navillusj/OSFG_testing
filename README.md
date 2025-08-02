@@ -1,5 +1,6 @@
 # My Open-Source Firewall
 THIS REPO GETS UPDATED NIGHTLY AND MAY NOT WORK, I SUGGEST YOU DOWNLOAD THE STABLE VERSION https://github.com/navillusj/OSFG
+<br>
 <img width="523" height="963" alt="image" src="https://github.com/user-attachments/assets/3ddfef16-8bc5-4a94-b60c-e62b328f0140" />
 
 
@@ -70,6 +71,7 @@ This script should fix the
 ** (process:11169): WARNING **: 08:44:26.915: Permissions for /etc/netplan/01-network-config.yaml are too open. Netplan configuration should NOT be accessible by others.
 ```
 errors
+
 
 
 
