@@ -205,7 +205,6 @@ code {
     background-color: #40a060;
 }
 
-/* NEW: Styles for the add and remove buttons */
 .button-add {
     background-color: #50c878;
 }
@@ -222,7 +221,6 @@ code {
     background-color: #b32a32;
 }
 
-/* Existing styles below */
 .grid {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
@@ -368,7 +366,7 @@ footer {
     left: 0;
     right: 0;
     bottom: 0;
-    background-color: #d9363e; /* Red for blocked */
+    background-color: #d9363e;
     transition: .4s;
     border-radius: 34px;
 }
@@ -384,7 +382,7 @@ footer {
     border-radius: 50%;
 }
 input:checked + .slider {
-    background-color: #50c878; /* Green for allowed */
+    background-color: #50c878;
 }
 input:checked + .slider:before {
     transform: translateX(26px);
@@ -418,4 +416,87 @@ input:checked + .slider:before {
 
 .interfaces-table tbody tr:hover {
     background-color: #333;
+}
+
+/* Network Stats Page Specific Styles (from view_network_stats.php makeover) */
+.stat-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 25px;
+    margin-top: 25px;
+}
+
+.stat-card-large {
+    background-color: #2a2a2a;
+    border: 1px solid #333;
+    padding: 25px;
+    border-radius: 12px;
+    box-shadow: 0 5px 15px rgba(0, 0, 0, 0.2);
+    text-align: center;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    min-height: 150px;
+    border-left: 6px solid #4a90e2;
+}
+
+.stat-card-large h3 {
+    margin-top: 0;
+    font-size: 1.5em;
+    color: #ffffff;
+    border-bottom: none;
+    padding-bottom: 0;
+}
+
+.stat-card-large .value {
+    font-size: 2.8em;
+    font-weight: 700;
+    color: #50c878; /* Green for positive values */
+    margin: 10px 0;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+.stat-card-large .value.download {
+    color: #4a90e2; /* Blue for download */
+}
+.stat-card-large .value.upload {
+    color: #d9363e; /* Red for upload */
+}
+
+.stat-card-large .value i {
+    font-size: 0.8em;
+}
+
+.stat-card-large small {
+    color: #aaa;
+    font-size: 0.85em;
+    margin-top: 5px;
+}
+
+.info-card {
+    background-color: #2a2a2a;
+    border: 1px solid #333;
+    padding: 20px;
+    border-radius: 12px;
+    box-shadow: 0 5px 15px rgba(0, 0, 0, 0.2);
+    margin-top: 30px;
+}
+
+.info-card h3 {
+    border-bottom: 1px solid #444;
+    padding-bottom: 10px;
+    margin-bottom: 15px;
+}
+
+.cron-info {
+    font-size: 0.9em;
+    color: #bbb;
+    margin-top: 15px;
+}
+.cron-info code {
+    background-color: #333;
+    padding: 2px 5px;
+    border-radius: 4px;
 }
