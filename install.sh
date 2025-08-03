@@ -207,12 +207,10 @@ install_dependencies() {
         sudo apt install -y net-tools dnsmasq iptables-persistent apache2 php libapache2-mod-php jq ipcalc dos2unix openssl bridge-utils wget curl
     fi
 
-    # Removed yq installation as it's no longer used for direct Netplan modifications
-    # (assuming Netplan modifications are no longer part of the web UI after this change)
-    # If you still use yq for other purposes (e.g., manage access control ipset), re-add it.
+    # YQ is needed for Access Control features
     if ! command -v yq &>/dev/null; then
-        echo "Installing yq (Go version)... (Needed for Access Control features)" # Re-added note
-        YQ_VERSION="v4.42.1"
+        echo "Installing yq (Go version)... (Needed for Access Control features)"
+        YQ_VERSION="v4.42.1" # Check for the latest version on GitHub: https://github.com/mikefarah/yq/releases
         YQ_BINARY="yq_linux_amd64"
         wget "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/${YQ_BINARY}" -O /usr/local/bin/yq || { echo "Failed to download yq. Check internet connection or YQ_VERSION/YQ_BINARY."; exit 1; }
         sudo chmod +x /usr/local/bin/yq
@@ -263,16 +261,15 @@ configure_system() {
     # Allow established/related forwarded connections
     sudo iptables -A FORWARD -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
 
-    # Removed ipset blocking rules from here. Blocking will be added dynamically by PHP.
-    # We still need the ipset for 'no_internet_access' for clients, though.
-    # This must be created here as it's not part of blocked_sites anymore.
+    # IPset for 'no_internet_access' for clients
     echo "Creating ipset 'no_internet_access'..."
     sudo ipset create no_internet_access hash:ip || { echo "Warning: Failed to create ipset 'no_internet_access'." >&2; }
-    # Blocking rule for 'no_internet_access' (Still needed here)
+    # Blocking rule for 'no_internet_access' (Still needed here, insert after RELATED,ESTABLISHED)
     sudo iptables -A FORWARD -m set --match-set no_internet_access src -j DROP
 
 
     # GENERAL FORWARDING ALLOW (FOR ALL ALLOWED TRAFFIC)
+    # This comes after specific DROP rules.
     # Allow all general outbound traffic from the LAN (br0) to the WAN ($WAN_IFACE)
     sudo iptables -A FORWARD -i br0 -o "$WAN_IFACE" -j ACCEPT
 
@@ -292,35 +289,6 @@ configure_system() {
     sudo rm -f /etc/resolv.conf
     echo "nameserver 127.0.0.1" | sudo tee /etc/resolv.conf > /dev/null
 }
-
-# Function to set up login credentials in users.json
-setup_login_credentials() {
-    echo "--- Setting up initial user credentials ---"
-    read -rp "Enter a username for the web dashboard: " WEB_USERNAME
-    read -rs -p "Enter a password for the web dashboard: " WEB_PASSWORD
-    echo
-
-    if [[ -z "$WEB_USERNAME" || -z "$WEB_PASSWORD" ]]; then
-        echo "Username and password cannot be empty. Exiting."
-        exit 1
-    fi
-
-    HASHED_PASSWORD=$(printf "%s" "$WEB_PASSWORD" | openssl dgst -sha256 | awk '{print $2}')
-    
-    cat <<EOF | sudo tee /var/www/html/users.json > /dev/null
-{
-  "users": [
-    {
-      "username": "$WEB_USERNAME",
-      "password_hash": "$HASHED_PASSWORD"
-    }
-  ]
-}
-EOF
-    
-    echo "Initial user '$WEB_USERNAME' created successfully."
-}
-
 
 # --- 4. CONFIG FILE GENERATION (this function remains the same as before, generates basic configs) ---
 generate_configs() {
@@ -547,7 +515,7 @@ setup_web_interface() {
     
     sudo rm -f /var/www/html/credentials.php
     
-    sudo touch /var/www/html/blocked_domains.txt # This file is still used for the general 'no_internet_access' ipset.
+    sudo touch /var/www/html/blocked_domains.txt
     
     sudo chown -R www-data:www-data "$REMOTE_WEB_ROOT"
     sudo find "$REMOTE_WEB_ROOT" -type f -exec sudo chmod 644 {} +
@@ -555,9 +523,7 @@ setup_web_interface() {
 
     echo "Adding sudo rule for www-data to run scripts, network commands, and read logs..."
     sudo mkdir -p /etc/sudoers.d/
-    # REVISED SUDOERS LINE - removed all ipset-related commands except for 'no_internet_access'
-    # Added general iptables rule management
-    echo "www-data ALL=(root) NOPASSWD: /usr/local/bin/update_blocked_ips.sh, /usr/sbin/ipset add no_internet_access *, /usr/sbin/ipset del no_internet_access *, /usr/sbin/ipset flush no_internet_access, /usr/local/bin/update_hostapd.sh, /usr/bin/systemctl restart hostapd, /bin/ping, /usr/sbin/netplan apply, /usr/local/bin/yq, /usr/sbin/ip link set * up, /usr/sbin/ip link set * down, /usr/bin/tee /etc/netplan/01-network-config.yaml, /usr/bin/tail -n *, /usr/bin/tail -n 5000 /var/log/syslog, /usr/bin/tail -n 5000 /var/log/kern.log, /usr/bin/tail -n 5000 /var/log/auth.log, /usr/bin/tail -n 5000 /var/log/apache2/access.log, /usr/bin/tail -n 5000 /var/log/apache2/error.log, /usr/bin/tail -n 5000 /var/log/dnsmasq.log, /usr/sbin/iptables -A FORWARD -d * -j DROP, /usr/sbin/iptables -D FORWARD -d * -j DROP, /usr/sbin/iptables -L FORWARD -n -v --line-numbers" | sudo tee /etc/sudoers.d/www-data_firewall > /dev/null
+    echo "www-data ALL=(root) NOPASSWD: /usr/local/bin/update_blocked_ips.sh, /usr/sbin/ipset add no_internet_access *, /usr/sbin/ipset del no_internet_access *, /usr/sbin/ipset flush no_internet_access, /usr/local/bin/update_hostapd.sh, /usr/bin/systemctl restart hostapd, /bin/ping, /usr/sbin/netplan apply, /usr/local/bin/yq, /usr/sbin/ip link set * up, /usr/sbin/ip link set * down, /usr/bin/tee /etc/netplan/01-network-config.yaml, /usr/bin/tail -n *, /usr/bin/tail -n 5000 /var/log/syslog, /usr/bin/tail -n 5000 /var/log/kern.log, /usr/bin/tail -n 5000 /var/log/auth.log, /usr/bin/tail -n 5000 /var/log/apache2/access.log, /usr/bin/tail -n 5000 /var/log/apache2/error.log, /usr/bin/tail -n 5000 /var/log/dnsmasq.log, /usr/sbin/iptables -A FORWARD -d * -j DROP, /usr/sbin/iptables -D FORWARD -d * -j DROP, /usr/sbin/iptables -L FORWARD -n -v --line-numbers, /usr/sbin/ipset create *, /usr/sbin/ipset destroy *, /usr/sbin/ipset add *, /usr/sbin/ipset list *" | sudo tee /etc/sudoers.d/www-data_firewall > /dev/null
     sudo chmod 0440 /etc/sudoers.d/www-data_firewall
     
     echo "Setting permissions for dnsmasq.leases file..."
@@ -608,66 +574,4 @@ configure_services() {
     fi
 }
 
-# --- 6. FIRST-RUN SCRIPT EXECUTION ---
-run_first_time_scripts() {
-    echo "--- Running custom scripts for the first time to ensure they work ---"
-
-    echo "Executing update_blocked_ips.sh..." # This script will now only manage no_internet_access
-    if [ -f "/usr/local/bin/update_blocked_ips.sh" ]; then
-        sudo /usr/local/bin/update_blocked_ips.sh
-        if [ $? -ne 0 ]; then
-            echo "Warning: update_blocked_ips.sh exited with an error, but the installation will continue."
-        else
-            echo "update_blocked_ips.sh completed successfully."
-        fi
-    else
-        echo "Warning: update_blocked_ips.sh not found at /usr/local/bin/. Skipping execution."
-    fi
-
-    echo "Executing update_net_stats.sh..."
-    if [ -f "/usr/local/bin/update_net_stats.sh" ]; then
-        sudo /usr/local/bin/update_net_stats.sh
-        if [ $? -ne 0 ]; then
-            echo "Warning: update_net_stats.sh exited with an error, but the installation will continue."
-        else
-            echo "update_net_stats.sh completed successfully."
-        fi
-    else
-        echo "Warning: update_net_stats.sh not found at /usr/local/bin/. Skipping execution."
-    fi
-}
-
-# --- 7. MAIN EXECUTION FLOW ---
-main() {
-    if [[ $EUID -ne 0 ]]; then
-        echo "This script must be run as root or with sudo."
-        exit 1
-    fi
-    
-    REQUIRED_COMMANDS=(ip awk tee sed openssl iptables systemctl dos2unix ipcalc jq wget curl)
-    MISSING_COMMANDS=()
-    for cmd in "${REQUIRED_COMMANDS[@]}"; do
-        if ! command -v "$cmd" &>/dev/null; then
-            MISSING_COMMANDS+=("$cmd")
-        fi
-    done
-
-    if [ ${#MISSING_COMMANDS[@]} -ne 0 ]; then
-        echo "Notice: Some commands are missing but will be installed during the dependency installation step: ${MISSING_COMMANDS[*]}"
-    fi
-
-    detect_interfaces
-    install_dependencies
-    configure_system
-    generate_configs
-    setup_web_interface
-    setup_login_credentials
-    configure_services
-    run_first_time_scripts
-
-    echo "--- Installation Complete! ---"
-    echo "Your router/firewall should now be configured."
-    echo "Access the web interface at http://$LAN_IP"
-}
-
-main "$@"
+# --- 6
