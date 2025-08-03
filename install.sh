@@ -240,25 +240,28 @@ configure_system() {
     sudo iptables -P OUTPUT ACCEPT
 
     # --- INPUT Chain (Traffic to the Router Itself) ---
-    # Allow established/related connections
-    sudo iptables -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
-    # Allow loopback traffic
+    # Allow loopback traffic first - always safe and needed
     sudo iptables -A INPUT -i lo -j ACCEPT
-    # Allow router's own DNS/HTTP(S) access from LAN (br0)
-    sudo iptables -A INPUT -i br0 -p udp --dport 53 -j ACCEPT
-    sudo iptables -A INPUT -i br0 -p tcp --dport 53 -j ACCEPT
+
+    # CRITICAL: Allow DHCP and DNS traffic on br0 VERY EARLY in INPUT chain
+    # This ensures dnsmasq can get requests from clients before general drops or connection tracking.
+    sudo iptables -A INPUT -i br0 -p udp --dport 67 -j ACCEPT # DHCP (server)
+    sudo iptables -A INPUT -i br0 -p udp --dport 68 -j ACCEPT # DHCP (client, if br0 is also a client)
+    sudo iptables -A INPUT -i br0 -p udp --dport 53 -j ACCEPT # DNS UDP
+    sudo iptables -A INPUT -i br0 -p tcp --dport 53 -j ACCEPT # DNS TCP
+    
+    # Allow web interface access
     sudo iptables -A INPUT -i br0 -p tcp --dport 80 -j ACCEPT
     sudo iptables -A INPUT -i br0 -p tcp --dport 443 -j ACCEPT
-    # Allow DHCP (client and server) traffic on br0
-    sudo iptables -A INPUT -i br0 -p udp --dport 67 -j ACCEPT
-    sudo iptables -A INPUT -i br0 -p udp --dport 68 -j ACCEPT
+    
     # Allow SSH access to the router from the internal network (br0)
     sudo iptables -A INPUT -i br0 -p tcp --dport 22 -j ACCEPT
-    # Allow SSH access to the router from WAN (OPTIONAL - DANGER if not protected)
-    # sudo iptables -A INPUT -i "$WAN_IFACE" -p tcp --dport 22 -j ACCEPT # Uncomment with caution!
+
+    # Allow established/related connections (should come AFTER specific service rules if policy is DROP)
+    sudo iptables -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
 
     # --- FORWARD Chain (Traffic Passing Through the Router) ---
-    # Allow established/related forwarded connections
+    # Allow established/related forwarded connections (essential for return traffic)
     sudo iptables -A FORWARD -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
 
     # IPset for 'no_internet_access' for clients
@@ -335,7 +338,7 @@ generate_configs() {
             CIDR_BITS=${BASH_REMATCH[1]}
             if [[ "$CIDR_BITS" -eq 24 ]]; then
                 NETMASK="255.255.255.0"
-                echo "Using default 255.55.255.0 netmask for /24 CIDR." >&2
+                echo "Using default 255.255.255.0 netmask for /24 CIDR." >&2
             fi
         fi
     fi
@@ -523,7 +526,9 @@ setup_web_interface() {
 
     echo "Adding sudo rule for www-data to run scripts, network commands, and read logs..."
     sudo mkdir -p /etc/sudoers.d/
-    echo "www-data ALL=(root) NOPASSWD: /usr/local/bin/update_blocked_ips.sh, /usr/sbin/ipset add no_internet_access *, /usr/sbin/ipset del no_internet_access *, /usr/sbin/ipset flush no_internet_access, /usr/local/bin/update_hostapd.sh, /usr/bin/systemctl restart hostapd, /bin/ping, /usr/sbin/netplan apply, /usr/local/bin/yq, /usr/sbin/ip link set * up, /usr/sbin/ip link set * down, /usr/bin/tee /etc/netplan/01-network-config.yaml, /usr/bin/tail -n *, /usr/bin/tail -n 5000 /var/log/syslog, /usr/bin/tail -n 5000 /var/log/kern.log, /usr/bin/tail -n 5000 /var/log/auth.log, /usr/bin/tail -n 5000 /var/log/apache2/access.log, /usr/bin/tail -n 5000 /var/log/apache2/error.log, /usr/bin/tail -n 5000 /var/log/dnsmasq.log, /usr/sbin/iptables -A FORWARD -d * -j DROP, /usr/sbin/iptables -D FORWARD -d * -j DROP, /usr/sbin/iptables -L FORWARD -n -v --line-numbers, /usr/sbin/ipset create *, /usr/sbin/ipset destroy *, /usr/sbin/ipset add *, /usr/sbin/ipset list *" | sudo tee /etc/sudoers.d/www-data_firewall > /dev/null
+    # REVISED SUDOERS LINE - removed all ipset-related commands except for 'no_internet_access'
+    # Added general iptables rule management for -A, -D, -L
+    echo "www-data ALL=(root) NOPASSWD: /usr/local/bin/update_blocked_ips.sh, /usr/sbin/ipset add no_internet_access *, /usr/sbin/ipset del no_internet_access *, /usr/sbin/ipset flush no_internet_access, /usr/local/bin/update_hostapd.sh, /usr/bin/systemctl restart hostapd, /bin/ping, /usr/sbin/netplan apply, /usr/local/bin/yq, /usr/sbin/ip link set * up, /usr/sbin/ip link set * down, /usr/bin/tee /etc/netplan/01-network-config.yaml, /usr/bin/tail -n *, /usr/bin/tail -n 5000 /var/log/syslog, /usr/bin/tail -n 5000 /var/log/kern.log, /usr/bin/tail -n 5000 /var/log/auth.log, /usr/bin/tail -n 5000 /var/log/apache2/access.log, /usr/bin/tail -n 5000 /var/log/apache2/error.log, /usr/bin/tail -n 5000 /var/log/dnsmasq.log, /usr/sbin/iptables -A FORWARD -d * -j DROP, /usr/sbin/iptables -D FORWARD -d * -j DROP, /usr/sbin/iptables -L FORWARD -n -v --line-numbers" | sudo tee /etc/sudoers.d/www-data_firewall > /dev/null
     sudo chmod 0440 /etc/sudoers.d/www-data_firewall
     
     echo "Setting permissions for dnsmasq.leases file..."
