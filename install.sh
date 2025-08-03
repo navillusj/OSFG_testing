@@ -241,14 +241,14 @@ configure_system() {
 
     # --- INPUT Chain (Traffic to the Router Itself) ---
     # Allow loopback traffic first - always safe and needed
-    sudo iptables -A INPUT -i lo -j ACCEPT
+    sudo iptables -I INPUT 1 -i lo -j ACCEPT # Insert at beginning
 
     # CRITICAL: Allow DHCP and DNS traffic on br0 VERY EARLY in INPUT chain
-    # This ensures dnsmasq can get requests from clients before general drops or connection tracking.
-    sudo iptables -A INPUT -i br0 -p udp --dport 67 -j ACCEPT # DHCP (server)
-    sudo iptables -A INPUT -i br0 -p udp --dport 68 -j ACCEPT # DHCP (client, if br0 is also a client)
-    sudo iptables -A INPUT -i br0 -p udp --dport 53 -j ACCEPT # DNS UDP
-    sudo iptables -A INPUT -i br0 -p tcp --dport 53 -j ACCEPT # DNS TCP
+    # These are inserted at specific positions to guarantee they are processed early.
+    sudo iptables -I INPUT 2 -i br0 -p udp --dport 67 -j ACCEPT # DHCP (server)
+    sudo iptables -I INPUT 3 -i br0 -p udp --dport 68 -j ACCEPT # DHCP (client, if br0 is also a client)
+    sudo iptables -I INPUT 4 -i br0 -p udp --dport 53 -j ACCEPT # DNS UDP
+    sudo iptables -I INPUT 5 -i br0 -p tcp --dport 53 -j ACCEPT # DNS TCP
     
     # Allow web interface access
     sudo iptables -A INPUT -i br0 -p tcp --dport 80 -j ACCEPT
@@ -264,12 +264,11 @@ configure_system() {
     # Allow established/related forwarded connections (essential for return traffic)
     sudo iptables -A FORWARD -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
 
-    # IPset for 'no_internet_access' for clients
+    # IPset for 'no_internet_access' for clients (Managed by Access Control page)
     echo "Creating ipset 'no_internet_access'..."
     sudo ipset create no_internet_access hash:ip || { echo "Warning: Failed to create ipset 'no_internet_access'." >&2; }
-    # Blocking rule for 'no_internet_access' (Still needed here, insert after RELATED,ESTABLISHED)
-    sudo iptables -A FORWARD -m set --match-set no_internet_access src -j DROP
-
+    # Blocking rule for 'no_internet_access' (Inserted at specific position)
+    sudo iptables -I FORWARD 2 -m set --match-set no_internet_access src -j DROP # Insert after RELATED,ESTABLISHED
 
     # GENERAL FORWARDING ALLOW (FOR ALL ALLOWED TRAFFIC)
     # This comes after specific DROP rules.
@@ -328,8 +327,40 @@ generate_configs() {
     sudo chmod 640 /etc/netplan/01-network-config.yaml
     sudo chown root:www-data /etc/netplan/01-network-config.yaml
     sudo chmod 775 /etc/netplan/ # Set correct directory permissions for backup to work
-    sudo netplan apply
     
+    # CRITICAL FIX: Explicitly manage interface state for Netplan application
+    echo "Ensuring interfaces are in a clean state for Netplan apply..."
+    # Bring down and clear addresses from all selected LAN interfaces
+    for iface in $LAN_IFACES; do
+        if [ "$iface" != "$WAN_IFACE" ]; then
+            log_message "Bringing down and clearing $iface..."
+            sudo ip address flush dev "$iface" 2>/dev/null || true # Clear IP
+            sudo ip link set "$iface" down 2>/dev/null || true # Bring down
+        fi
+    done
+    # Bring down and clear address from the bridge itself
+    log_message "Bringing down and clearing br0..."
+    sudo ip address flush dev br0 2>/dev/null || true
+    sudo ip link set br0 down 2>/dev/null || true
+
+    # Apply Netplan configuration
+    log_message "Applying Netplan configuration..."
+    sudo netplan apply || { log_error "Netplan apply failed. Check 'sudo journalctl -u systemd-networkd' for details. Exiting."; exit 1; }
+    log_message "Netplan configuration applied."
+
+    # CRITICAL FIX: Explicitly bring up br0 and its members after netplan apply
+    # Sometimes netplan apply doesn't immediately bring up everything or associate correctly.
+    log_message "Explicitly bringing up interfaces after Netplan apply..."
+    sudo ip link set br0 up || log_error "Failed to bring up br0 after Netplan apply."
+    # Ensure physical interfaces that are part of the bridge are brought up
+    for iface in $LAN_IFACES; do
+        if [ "$iface" != "$WAN_IFACE" ]; then
+            log_message "Explicitly bringing up $iface..."
+            sudo ip link set "$iface" up || log_error "Failed to bring up $iface after Netplan apply."
+        fi
+    done
+
+
     sudo mv /etc/dnsmasq.conf /etc/dnsmasq.conf.bak 2>/dev/null
     NETMASK=$(ipcalc -n "$LAN_IP_CIDR" 2>/dev/null | awk '/Netmask:/ {print $2}')
     if [[ -z "$NETMASK" ]]; then
@@ -431,7 +462,7 @@ EOF
     sudo chmod +x ./scripts/update_hostapd.sh
 
     echo "--- Correcting script line endings ---"
-    if [ -f "./scripts/update_blocked_ips.sh" ]; then # This script is now mostly obsolete, but still copy if present.
+    if [ -f "./scripts/update_blocked_ips.sh" ]; then
         dos2unix ./scripts/update_blocked_ips.sh
     fi
     if [ -f "./scripts/update_net_stats.sh" ]; then
@@ -443,7 +474,7 @@ EOF
     
     sudo mkdir -p /usr/local/bin/
 
-    sudo cp ./scripts/update_blocked_ips.sh /usr/local/bin/ # Copy it, even if not directly used for blocking
+    sudo cp ./scripts/update_blocked_ips.sh /usr/local/bin/
     sudo cp ./scripts/update_net_stats.sh /usr/local/bin/
     sudo cp ./scripts/update_hostapd.sh /usr/local/bin/
 
@@ -526,9 +557,7 @@ setup_web_interface() {
 
     echo "Adding sudo rule for www-data to run scripts, network commands, and read logs..."
     sudo mkdir -p /etc/sudoers.d/
-    # REVISED SUDOERS LINE - removed all ipset-related commands except for 'no_internet_access'
-    # Added general iptables rule management for -A, -D, -L
-    echo "www-data ALL=(root) NOPASSWD: /usr/local/bin/update_blocked_ips.sh, /usr/sbin/ipset add no_internet_access *, /usr/sbin/ipset del no_internet_access *, /usr/sbin/ipset flush no_internet_access, /usr/local/bin/update_hostapd.sh, /usr/bin/systemctl restart hostapd, /bin/ping, /usr/sbin/netplan apply, /usr/local/bin/yq, /usr/sbin/ip link set * up, /usr/sbin/ip link set * down, /usr/bin/tee /etc/netplan/01-network-config.yaml, /usr/bin/tail -n *, /usr/bin/tail -n 5000 /var/log/syslog, /usr/bin/tail -n 5000 /var/log/kern.log, /usr/bin/tail -n 5000 /var/log/auth.log, /usr/bin/tail -n 5000 /var/log/apache2/access.log, /usr/bin/tail -n 5000 /var/log/apache2/error.log, /usr/bin/tail -n 5000 /var/log/dnsmasq.log, /usr/sbin/iptables -A FORWARD -d * -j DROP, /usr/sbin/iptables -D FORWARD -d * -j DROP, /usr/sbin/iptables -L FORWARD -n -v --line-numbers" | sudo tee /etc/sudoers.d/www-data_firewall > /dev/null
+    echo "www-data ALL=(root) NOPASSWD: /usr/local/bin/update_blocked_ips.sh, /usr/sbin/ipset add no_internet_access *, /usr/sbin/ipset del no_internet_access *, /usr/sbin/ipset flush no_internet_access, /usr/local/bin/update_hostapd.sh, /usr/bin/systemctl restart hostapd, /bin/ping, /usr/sbin/netplan apply, /usr/local/bin/yq, /usr/sbin/ip link set * up, /usr/sbin/ip link set * down, /usr/bin/tee /etc/netplan/01-network-config.yaml, /usr/bin/tail -n *, /usr/bin/tail -n 5000 /var/log/syslog, /usr/bin/tail -n 5000 /var/log/kern.log, /usr/bin/tail -n 5000 /var/log/auth.log, /usr/bin/tail -n 5000 /var/log/apache2/access.log, /usr/bin/tail -n 5000 /var/log/apache2/error.log, /usr/bin/tail -n 5000 /var/log/dnsmasq.log, /usr/sbin/iptables -A FORWARD -d * -j DROP, /usr/sbin/iptables -D FORWARD -d * -j DROP, /usr/sbin/iptables -L FORWARD -n -v --line-numbers, /usr/sbin/ipset create *, /usr/sbin/ipset destroy *, /usr/sbin/ipset add *, /usr/sbin/ipset list *" | sudo tee /etc/sudoers.d/www-data_firewall > /dev/null
     sudo chmod 0440 /etc/sudoers.d/www-data_firewall
     
     echo "Setting permissions for dnsmasq.leases file..."
@@ -548,8 +577,29 @@ configure_services() {
         sudo systemctl start hostapd
     fi
 
-    sudo systemctl restart dnsmasq
+    # CRITICAL FIX: Add a short delay and recheck interface state before dnsmasq restart
+    log_message "Waiting for network interfaces to settle before restarting dnsmasq..."
+    sleep 3 # Give Netplan a moment to fully configure interfaces
+    
+    # Check if br0 has an IP before restarting dnsmasq
+    local br0_ip=""
+    for i in {1..5}; do # Try a few times
+        br0_ip=$(ip a show br0 2>/dev/null | grep -oP 'inet\s+\K[0-9.]+' | head -n 1)
+        if [ -n "$br0_ip" ]; then
+            log_message "br0 has IP $br0_ip. Proceeding with dnsmasq."
+            break
+        fi
+        log_message "br0 not yet configured with IP. Waiting 1 second... ($i/5)"
+        sleep 1
+    done
+
+    if [ -z "$br0_ip" ]; then
+        log_error "br0 did not get an IP address. Dnsmasq may fail to bind. Check Netplan configuration."
+    fi
+
+    sudo systemctl restart dnsmasq || { log_error "Failed to restart dnsmasq. Check logs: 'sudo journalctl -u dnsmasq'"; }
     sudo systemctl enable dnsmasq
+
     sudo systemctl restart apache2
     if ! dpkg -s php-sessions &>/dev/null; then
         echo "php-sessions not found, attempting to install..."
