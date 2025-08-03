@@ -28,7 +28,7 @@ get_choice() {
     else
         echo "Invalid input. Please enter a number between 1 and $max_choice."
         return 1
-    fiput
+    fi
 }
 
 # Function to get a valid list of choices from the user
@@ -509,8 +509,6 @@ setup_web_interface() {
 
     echo "Adding sudo rule for www-data to run scripts, network commands, and read logs..."
     sudo mkdir -p /etc/sudoers.d/
-    # Updated sudoers line for clarity and robustness for 'tail'
-    # Includes /usr/bin/tail -n * for general tailing
     echo "www-data ALL=(root) NOPASSWD: /usr/local/bin/update_blocked_ips.sh, /usr/sbin/ipset add no_internet_access *, /usr/sbin/ipset del no_internet_access *, /usr/sbin/ipset flush no_internet_access, /usr/local/bin/update_hostapd.sh, /usr/bin/systemctl restart hostapd, /bin/ping, /usr/sbin/netplan apply, /usr/local/bin/yq, /usr/sbin/ip link set * up, /usr/sbin/ip link set * down, /usr/bin/tee /etc/netplan/01-network-config.yaml, /usr/bin/tail -n *, /usr/bin/tail -n 5000 /var/log/syslog, /usr/bin/tail -n 5000 /var/log/kern.log, /usr/bin/tail -n 5000 /var/log/auth.log, /usr/bin/tail -n 5000 /var/log/apache2/access.log, /usr/bin/tail -n 5000 /var/log/apache2/error.log, /usr/bin/tail -n 5000 /var/log/dnsmasq.log" | sudo tee /etc/sudoers.d/www-data_firewall > /dev/null
     sudo chmod 0440 /etc/sudoers.d/www-data_firewall
     
@@ -610,12 +608,12 @@ main() {
         echo "Notice: Some commands are missing but will be installed during the dependency installation step: ${MISSING_COMMANDS[*]}"
     fi
 
-    setup_login_credentials
     detect_interfaces
     install_dependencies
     configure_system
     generate_configs
     setup_web_interface
+    setup_login_credentials # MOVED TO CORRECT POSITION
     configure_services
     run_first_time_scripts
 
