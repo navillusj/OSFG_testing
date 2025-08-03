@@ -335,7 +335,7 @@ generate_configs() {
             CIDR_BITS=${BASH_REMATCH[1]}
             if [[ "$CIDR_BITS" -eq 24 ]]; then
                 NETMASK="255.255.255.0"
-                echo "Using default 255.255.255.0 netmask for /24 CIDR." >&2
+                echo "Using default 255.55.255.0 netmask for /24 CIDR." >&2
             fi
         fi
     fi
@@ -574,4 +574,66 @@ configure_services() {
     fi
 }
 
-# --- 6
+# --- 6. FIRST-RUN SCRIPT EXECUTION ---
+run_first_time_scripts() {
+    echo "--- Running custom scripts for the first time to ensure they work ---"
+
+    echo "Executing update_blocked_ips.sh..." # This script will now only manage no_internet_access
+    if [ -f "/usr/local/bin/update_blocked_ips.sh" ]; then
+        sudo /usr/local/bin/update_blocked_ips.sh
+        if [ $? -ne 0 ]; then
+            echo "Warning: update_blocked_ips.sh exited with an error, but the installation will continue."
+        else
+            echo "update_blocked_ips.sh completed successfully."
+        fi
+    else
+        echo "Warning: update_blocked_ips.sh not found at /usr/local/bin/. Skipping execution."
+    fi
+
+    echo "Executing update_net_stats.sh..."
+    if [ -f "/usr/local/bin/update_net_stats.sh" ]; then
+        sudo /usr/local/bin/update_net_stats.sh
+        if [ $? -ne 0 ]; then
+            echo "Warning: update_net_stats.sh exited with an error, but the installation will continue."
+        else
+            echo "update_net_stats.sh completed successfully."
+        fi
+    else
+        echo "Warning: update_net_stats.sh not found at /usr/local/bin/. Skipping execution."
+    fi
+}
+
+# --- 7. MAIN EXECUTION FLOW ---
+main() {
+    if [[ $EUID -ne 0 ]]; then
+        echo "This script must be run as root or with sudo."
+        exit 1
+    fi
+    
+    REQUIRED_COMMANDS=(ip awk tee sed openssl iptables systemctl dos2unix ipcalc jq wget curl)
+    MISSING_COMMANDS=()
+    for cmd in "${REQUIRED_COMMANDS[@]}"; do
+        if ! command -v "$cmd" &>/dev/null; then
+            MISSING_COMMANDS+=("$cmd")
+        fi
+    done
+
+    if [ ${#MISSING_COMMANDS[@]} -ne 0 ]; then
+        echo "Notice: Some commands are missing but will be installed during the dependency installation step: ${MISSING_COMMANDS[*]}"
+    fi
+
+    detect_interfaces
+    install_dependencies
+    configure_system
+    generate_configs
+    setup_web_interface
+    setup_login_credentials
+    configure_services
+    run_first_time_scripts
+
+    echo "--- Installation Complete! ---"
+    echo "Your router/firewall should now be configured."
+    echo "Access the web interface at http://$LAN_IP"
+}
+
+main "$@"
