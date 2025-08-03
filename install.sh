@@ -200,15 +200,19 @@ EOF
 install_dependencies() {
     echo "--- Installing required packages ---"
     sudo apt update
+    # Removed dnsutils (for dig) and ipset as they are no longer needed for blocking
     if [[ "$setup_wifi" == "y" ]]; then
-        sudo apt install -y net-tools dnsmasq hostapd wireless-tools iw ipset iptables-persistent apache2 php libapache2-mod-php jq dnsutils ipcalc dos2unix openssl bridge-utils wget curl
+        sudo apt install -y net-tools dnsmasq hostapd wireless-tools iw iptables-persistent apache2 php libapache2-mod-php jq ipcalc dos2unix openssl bridge-utils wget curl
     else
-        sudo apt install -y net-tools dnsmasq ipset iptables-persistent apache2 php libapache2-mod-php jq dnsutils ipcalc dos2unix openssl bridge-utils wget curl
+        sudo apt install -y net-tools dnsmasq iptables-persistent apache2 php libapache2-mod-php jq ipcalc dos2unix openssl bridge-utils wget curl
     fi
 
+    # Removed yq installation as it's no longer used for direct Netplan modifications
+    # (assuming Netplan modifications are no longer part of the web UI after this change)
+    # If you still use yq for other purposes (e.g., manage access control ipset), re-add it.
     if ! command -v yq &>/dev/null; then
-        echo "Installing yq (Go version)..."
-        YQ_VERSION="v4.42.1" # Check for the latest version on GitHub: https://github.com/mikefarah/yq/releases
+        echo "Installing yq (Go version)... (Needed for Access Control features)" # Re-added note
+        YQ_VERSION="v4.42.1"
         YQ_BINARY="yq_linux_amd64"
         wget "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/${YQ_BINARY}" -O /usr/local/bin/yq || { echo "Failed to download yq. Check internet connection or YQ_VERSION/YQ_BINARY."; exit 1; }
         sudo chmod +x /usr/local/bin/yq
@@ -224,47 +228,61 @@ configure_system() {
     
     echo "Setting up basic firewall rules..."
     
+    # Flush all chains before adding new rules
     sudo iptables -F
     sudo iptables -X
     sudo iptables -t nat -F
     sudo iptables -t nat -X
     sudo iptables -t mangle -F
     sudo iptables -t mangle -X
+
+    # Set default policies (important order)
     sudo iptables -P INPUT DROP
     sudo iptables -P FORWARD DROP
     sudo iptables -P OUTPUT ACCEPT
 
+    # --- INPUT Chain (Traffic to the Router Itself) ---
+    # Allow established/related connections
     sudo iptables -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
-    sudo iptables -A FORWARD -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
-
+    # Allow loopback traffic
     sudo iptables -A INPUT -i lo -j ACCEPT
-
+    # Allow router's own DNS/HTTP(S) access from LAN (br0)
     sudo iptables -A INPUT -i br0 -p udp --dport 53 -j ACCEPT
     sudo iptables -A INPUT -i br0 -p tcp --dport 53 -j ACCEPT
     sudo iptables -A INPUT -i br0 -p tcp --dport 80 -j ACCEPT
     sudo iptables -A INPUT -i br0 -p tcp --dport 443 -j ACCEPT
-    
+    # Allow DHCP (client and server) traffic on br0
     sudo iptables -A INPUT -i br0 -p udp --dport 67 -j ACCEPT
     sudo iptables -A INPUT -i br0 -p udp --dport 68 -j ACCEPT
-    
-    echo "Allowing SSH access to the router from the internal network..."
+    # Allow SSH access to the router from the internal network (br0)
     sudo iptables -A INPUT -i br0 -p tcp --dport 22 -j ACCEPT
+    # Allow SSH access to the router from WAN (OPTIONAL - DANGER if not protected)
+    # sudo iptables -A INPUT -i "$WAN_IFACE" -p tcp --dport 22 -j ACCEPT # Uncomment with caution!
 
-    echo "Creating ipset 'blocked_sites'..."
-    sudo ipset create blocked_sites hash:ip || { echo "Warning: Failed to create ipset 'blocked_sites'." >&2; }
+    # --- FORWARD Chain (Traffic Passing Through the Router) ---
+    # Allow established/related forwarded connections
+    sudo iptables -A FORWARD -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+
+    # Removed ipset blocking rules from here. Blocking will be added dynamically by PHP.
+    # We still need the ipset for 'no_internet_access' for clients, though.
+    # This must be created here as it's not part of blocked_sites anymore.
     echo "Creating ipset 'no_internet_access'..."
     sudo ipset create no_internet_access hash:ip || { echo "Warning: Failed to create ipset 'no_internet_access'." >&2; }
-    
-    echo "Allowing all outbound traffic from the LAN to the internet..."
-    sudo iptables -A FORWARD -i br0 -o "$WAN_IFACE" -j ACCEPT
-    
-    echo "Adding iptables rule to block domains from 'blocked_sites' ipset..."
-    sudo iptables -A FORWARD -m set --match-set blocked_sites dst -j DROP
-    
-    echo "Adding iptables rule to enforce internet access control..."
+    # Blocking rule for 'no_internet_access' (Still needed here)
     sudo iptables -A FORWARD -m set --match-set no_internet_access src -j DROP
 
-    echo "Applying iptables NAT rule for $WAN_IFACE..."
+
+    # GENERAL FORWARDING ALLOW (FOR ALL ALLOWED TRAFFIC)
+    # Allow all general outbound traffic from the LAN (br0) to the WAN ($WAN_IFACE)
+    sudo iptables -A FORWARD -i br0 -o "$WAN_IFACE" -j ACCEPT
+
+    # --- NAT Table (Traffic Masquerading/Redirection) ---
+    # Force LAN DNS to router's dnsmasq (PREROUTING)
+    echo "Adding DNS redirection rules (NAT PREROUTING)..."
+    sudo iptables -t nat -A PREROUTING -i br0 -p udp --dport 53 -j DNAT --to-destination "$LAN_IP"
+    sudo iptables -t nat -A PREROUTING -i br0 -p tcp --dport 53 -j DNAT --to-destination "$LAN_IP"
+
+    # Apply iptables NAT (Masquerading) for internet access (POSTROUTING)
     sudo iptables -t nat -A POSTROUTING -o "$WAN_IFACE" -j MASQUERADE
     
     sudo netfilter-persistent save
@@ -275,7 +293,36 @@ configure_system() {
     echo "nameserver 127.0.0.1" | sudo tee /etc/resolv.conf > /dev/null
 }
 
-# --- 4. CONFIG FILE GENERATION ---
+# Function to set up login credentials in users.json
+setup_login_credentials() {
+    echo "--- Setting up initial user credentials ---"
+    read -rp "Enter a username for the web dashboard: " WEB_USERNAME
+    read -rs -p "Enter a password for the web dashboard: " WEB_PASSWORD
+    echo
+
+    if [[ -z "$WEB_USERNAME" || -z "$WEB_PASSWORD" ]]; then
+        echo "Username and password cannot be empty. Exiting."
+        exit 1
+    fi
+
+    HASHED_PASSWORD=$(printf "%s" "$WEB_PASSWORD" | openssl dgst -sha256 | awk '{print $2}')
+    
+    cat <<EOF | sudo tee /var/www/html/users.json > /dev/null
+{
+  "users": [
+    {
+      "username": "$WEB_USERNAME",
+      "password_hash": "$HASHED_PASSWORD"
+    }
+  ]
+}
+EOF
+    
+    echo "Initial user '$WEB_USERNAME' created successfully."
+}
+
+
+# --- 4. CONFIG FILE GENERATION (this function remains the same as before, generates basic configs) ---
 generate_configs() {
     echo "--- Generating configuration files ---"
     
@@ -345,10 +392,9 @@ rebind-domain-ok=/$LOCAL_DOMAIN/
 log-facility=/var/log/dnsmasq.log
 log-queries
 EOF
-    # Ensure dnsmasq.log file exists and has correct permissions
     sudo touch /var/log/dnsmasq.log
-    sudo chown root:adm /var/log/dnsmasq.log # Common log group
-    sudo chmod 640 /var/log/dnsmasq.log # Readable by adm group
+    sudo chown root:adm /var/log/dnsmasq.log
+    sudo chmod 640 /var/log/dnsmasq.log
 
     if [[ "$setup_wifi" == "y" ]]; then
         cat <<EOF | sudo tee /etc/hostapd/hostapd.conf > /dev/null
@@ -398,8 +444,8 @@ if ! [ -f "$HOSTAPD_CONF" ]; then
     exit 1
 fi
 
-sudo sed -i.bak -E "s/^(ssid=).*/\1$NEW_SSID/" "$HOSTAPD_CONF" && \
-sudo sed -i.bak -E "s/^(wpa_passphrase=).*/\1$NEW_PASS/" "$HOSTAPD_CONF"
+sudo sed -i.bak -E "s/^(ssid=.*/ssid=$NEW_SSID/" "$HOSTAPD_CONF" && \
+sudo sed -i.bak -E "s/^(wpa_passphrase=.*/wpa_passphrase=$NEW_PASS/" "$HOSTAPD_CONF"
 
 sudo systemctl restart hostapd
 
@@ -414,7 +460,7 @@ EOF
     sudo chmod +x ./scripts/update_hostapd.sh
 
     echo "--- Correcting script line endings ---"
-    if [ -f "./scripts/update_blocked_ips.sh" ]; then
+    if [ -f "./scripts/update_blocked_ips.sh" ]; then # This script is now mostly obsolete, but still copy if present.
         dos2unix ./scripts/update_blocked_ips.sh
     fi
     if [ -f "./scripts/update_net_stats.sh" ]; then
@@ -426,7 +472,7 @@ EOF
     
     sudo mkdir -p /usr/local/bin/
 
-    sudo cp ./scripts/update_blocked_ips.sh /usr/local/bin/
+    sudo cp ./scripts/update_blocked_ips.sh /usr/local/bin/ # Copy it, even if not directly used for blocking
     sudo cp ./scripts/update_net_stats.sh /usr/local/bin/
     sudo cp ./scripts/update_hostapd.sh /usr/local/bin/
 
@@ -501,15 +547,17 @@ setup_web_interface() {
     
     sudo rm -f /var/www/html/credentials.php
     
-    sudo touch /var/www/html/blocked_domains.txt
+    sudo touch /var/www/html/blocked_domains.txt # This file is still used for the general 'no_internet_access' ipset.
     
-    sudo chown -R www-data:www-data /var/www/html
-    sudo chmod -R 644 /var/www/html/
-    sudo find /var/www/html -type d -exec chmod 755 {} +
+    sudo chown -R www-data:www-data "$REMOTE_WEB_ROOT"
+    sudo find "$REMOTE_WEB_ROOT" -type f -exec sudo chmod 644 {} +
+    sudo find "$REMOTE_WEB_ROOT" -type d -exec sudo chmod 755 {} +
 
     echo "Adding sudo rule for www-data to run scripts, network commands, and read logs..."
     sudo mkdir -p /etc/sudoers.d/
-    echo "www-data ALL=(root) NOPASSWD: /usr/local/bin/update_blocked_ips.sh, /usr/sbin/ipset add no_internet_access *, /usr/sbin/ipset del no_internet_access *, /usr/sbin/ipset flush no_internet_access, /usr/local/bin/update_hostapd.sh, /usr/bin/systemctl restart hostapd, /bin/ping, /usr/sbin/netplan apply, /usr/local/bin/yq, /usr/sbin/ip link set * up, /usr/sbin/ip link set * down, /usr/bin/tee /etc/netplan/01-network-config.yaml, /usr/bin/tail -n *, /usr/bin/tail -n 5000 /var/log/syslog, /usr/bin/tail -n 5000 /var/log/kern.log, /usr/bin/tail -n 5000 /var/log/auth.log, /usr/bin/tail -n 5000 /var/log/apache2/access.log, /usr/bin/tail -n 5000 /var/log/apache2/error.log, /usr/bin/tail -n 5000 /var/log/dnsmasq.log" | sudo tee /etc/sudoers.d/www-data_firewall > /dev/null
+    # REVISED SUDOERS LINE - removed all ipset-related commands except for 'no_internet_access'
+    # Added general iptables rule management
+    echo "www-data ALL=(root) NOPASSWD: /usr/local/bin/update_blocked_ips.sh, /usr/sbin/ipset add no_internet_access *, /usr/sbin/ipset del no_internet_access *, /usr/sbin/ipset flush no_internet_access, /usr/local/bin/update_hostapd.sh, /usr/bin/systemctl restart hostapd, /bin/ping, /usr/sbin/netplan apply, /usr/local/bin/yq, /usr/sbin/ip link set * up, /usr/sbin/ip link set * down, /usr/bin/tee /etc/netplan/01-network-config.yaml, /usr/bin/tail -n *, /usr/bin/tail -n 5000 /var/log/syslog, /usr/bin/tail -n 5000 /var/log/kern.log, /usr/bin/tail -n 5000 /var/log/auth.log, /usr/bin/tail -n 5000 /var/log/apache2/access.log, /usr/bin/tail -n 5000 /var/log/apache2/error.log, /usr/bin/tail -n 5000 /var/log/dnsmasq.log, /usr/sbin/iptables -A FORWARD -d * -j DROP, /usr/sbin/iptables -D FORWARD -d * -j DROP, /usr/sbin/iptables -L FORWARD -n -v --line-numbers" | sudo tee /etc/sudoers.d/www-data_firewall > /dev/null
     sudo chmod 0440 /etc/sudoers.d/www-data_firewall
     
     echo "Setting permissions for dnsmasq.leases file..."
@@ -564,7 +612,7 @@ configure_services() {
 run_first_time_scripts() {
     echo "--- Running custom scripts for the first time to ensure they work ---"
 
-    echo "Executing update_blocked_ips.sh..."
+    echo "Executing update_blocked_ips.sh..." # This script will now only manage no_internet_access
     if [ -f "/usr/local/bin/update_blocked_ips.sh" ]; then
         sudo /usr/local/bin/update_blocked_ips.sh
         if [ $? -ne 0 ]; then
@@ -596,7 +644,7 @@ main() {
         exit 1
     fi
     
-    REQUIRED_COMMANDS=(ip awk tee sed openssl ipset iptables systemctl dos2unix ipcalc jq wget curl)
+    REQUIRED_COMMANDS=(ip awk tee sed openssl iptables systemctl dos2unix ipcalc jq wget curl)
     MISSING_COMMANDS=()
     for cmd in "${REQUIRED_COMMANDS[@]}"; do
         if ! command -v "$cmd" &>/dev/null; then
@@ -613,7 +661,7 @@ main() {
     configure_system
     generate_configs
     setup_web_interface
-    setup_login_credentials # MOVED TO CORRECT POSITION
+    setup_login_credentials
     configure_services
     run_first_time_scripts
 
